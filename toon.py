@@ -50,14 +50,25 @@ def make_abbreviation(key, registry):
     return candidate
 
 
+MIN_KEY_LEN_TO_ABBREVIATE = 4  # keys ≤3 chars stay as-is — no compression benefit
+
+
 def build_key_map(obj):
-    """Return {original_key: abbreviation} for every key found in obj."""
+    """Return {original_key: abbreviation} for keys long enough to compress.
+
+    Keys with ≤3 chars are omitted (passed through unchanged via .get(k, k)
+    in _substitute). Iteration order is deterministic (depth-first, first-seen).
+    """
     keys = collect_keys(obj)
-    registry = {}  # abbrev -> original
-    key_map = {}   # original -> abbrev
+    registry = {}  # abbrev -> original (collision tracker)
+    key_map = {}   # original -> abbrev (only for keys we actually shorten)
     for k in keys:
+        if len(k) < MIN_KEY_LEN_TO_ABBREVIATE:
+            continue
         abbrev = make_abbreviation(k, registry)
-        key_map[k] = abbrev
+        # don't bother if abbreviation isn't shorter than the original
+        if len(abbrev) < len(k):
+            key_map[k] = abbrev
     return key_map
 
 
