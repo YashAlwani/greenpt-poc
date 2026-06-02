@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>GreenPT — Playground</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">▲</span>
+      <span class="name">GreenPT</span>
+      <span class="tag">Playground</span>
+    </div>
+    <div class="meta">
+      JSON optimization proxy &nbsp;·&nbsp;
+      <code>api.greenpt.ai/v1</code>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel input">
+      <h2>Input</h2>
+
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" rows="10" placeholder="Paste the prompt you'd send to your LLM…">Extract invoice fields from the text below and return JSON.
+
+---
+Vendor: BluePeak Logistics
+Invoice: BP-8821
+Date: 2026-03-08
+Total: EUR 7,891.60
+---
+
+Return ONLY valid JSON matching the schema.</textarea>
+
+      <label for="schema">Expected output schema (JSON)</label>
+      <textarea id="schema" rows="6">{
+  "vendor": "string",
+  "invoice_number": "string",
+  "invoice_date": "string",
+  "total_amount": "number",
+  "currency": "string"
+}</textarea>
+
+      <label for="method">Method</label>
+      <select id="method">
+        <option value="auto" selected>auto (smart routing)</option>
+        <option value="baseline">baseline (green-l-raw)</option>
+        <option value="postprocess">postprocess (green-l-raw + TOON)</option>
+        <option value="prompt_engineering">prompt_engineering (green-l)</option>
+        <option value="combined">combined (green-l + TOON)</option>
+      </select>
+
+      <button id="run-btn">Run optimization</button>
+      <p id="error" class="error hidden"></p>
+    </section>
+
+    <section class="panel output">
+      <h2>Result</h2>
+      <div id="empty" class="empty">Run a request to see optimized output.</div>
+
+      <div id="result" class="hidden">
+        <div class="kpis">
+          <div class="kpi">
+            <div class="kpi-label">Tokens before</div>
+            <div class="kpi-value" id="tokens-before">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Tokens after</div>
+            <div class="kpi-value" id="tokens-after">—</div>
+          </div>
+          <div class="kpi savings">
+            <div class="kpi-label">Savings</div>
+            <div class="kpi-value" id="savings">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Method used</div>
+            <div class="kpi-value method" id="method-used">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Status</div>
+            <div class="kpi-value" id="status">—</div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label">Latency</div>
+            <div class="kpi-value" id="elapsed">—</div>
+          </div>
+        </div>
+
+        <details open>
+          <summary>Decoded JSON (what your app receives)</summary>
+          <pre id="decoded"></pre>
+        </details>
+
+        <details>
+          <summary>TOON wire format (compressed string)</summary>
+          <pre id="toon"></pre>
+        </details>
+
+        <details>
+          <summary>Key map (sent once per session)</summary>
+          <pre id="key-map"></pre>
+        </details>
+
+        <details>
+          <summary>Raw model output</summary>
+          <pre id="raw"></pre>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>v0.1 · benchmark POC</span>
+    <span><a href="https://github.com/YashAlwani/greenpt-poc" target="_blank">github</a></span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
