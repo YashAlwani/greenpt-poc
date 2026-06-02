@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual envs
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables (API keys!)
+.env
+.env.local
+.env.*.local
+
+# Generated outputs
+outputs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Decisions log (local memory, not for repo)
+decisions/
+
+# Plan files (local Claude Code state)
+.claude/
