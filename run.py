@@ -18,9 +18,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_BASE = os.path.dirname(os.path.abspath(__file__))
-DATASET = os.path.join(_BASE, "generated_llm_dataset.csv")
-OUTPUT_DIR = os.path.join(_BASE, "outputs")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+DATASET = os.path.join(_HERE, "generated_llm_dataset.csv")
+OUTPUT_DIR = os.path.join(_HERE, "outputs")
 OUTPUT_CSV = os.path.join(OUTPUT_DIR, "results.csv")
 
 

@@ -13,11 +13,22 @@ Ruleset enforced here:
 
 import json
 import os
+import time
 
 import tiktoken
 from openai import OpenAI
 
 from toon import build_key_map, decode, encode
+
+try:
+    import events as _evt
+except ImportError:
+    _evt = None
+
+
+def _emit(event: dict):
+    if _evt:
+        _evt.emit(event)
 
 GREENPT_BASE = "https://api.greenpt.ai/v1"
 TEMPERATURE = 0
@@ -56,13 +67,21 @@ def _toon_user_prefix(key_map: dict) -> str:
     )
 
 
-def _call(model: str, system: str | None, user: str) -> str:
+def _call(model: str, system: str | None, user: str, _method: str = "?") -> str:
     """One LLM call. Returns the raw text content or __API_ERROR__: ... on failure.
 
     `green-l` and `green-r` (non-raw GreenPT models) reject system prompts —
     they ship with GreenPT's built-in optimization prompt. Pass system=None
     for those models.
     """
+    t0 = time.time()
+    _emit({
+        "type": "request",
+        "method": _method,
+        "model": model,
+        "user_tokens": count_tokens(user),
+        "t": t0,
+    })
     try:
         messages = []
         if system:
@@ -74,8 +93,30 @@ def _call(model: str, system: str | None, user: str) -> str:
             max_tokens=MAX_TOKENS,
             messages=messages,
         )
-        return (resp.choices[0].message.content or "").strip()
+        raw = (resp.choices[0].message.content or "").strip()
+        elapsed = round(time.time() - t0, 2)
+        _emit({
+            "type": "response",
+            "method": _method,
+            "model": model,
+            "response_tokens": count_tokens(raw),
+            "elapsed_s": elapsed,
+            "status": "ok",
+            "t": time.time(),
+        })
+        return raw
     except Exception as e:
+        elapsed = round(time.time() - t0, 2)
+        _emit({
+            "type": "response",
+            "method": _method,
+            "model": model,
+            "response_tokens": 0,
+            "elapsed_s": elapsed,
+            "status": "error",
+            "error": str(e),
+            "t": time.time(),
+        })
         return f"__API_ERROR__: {e}"
 
 
@@ -119,46 +160,67 @@ def _result(method: str, raw: str, toon: str, key_map: dict, decoded, status: st
 
 # ── 4 method tools ────────────────────────────────────────────────────────────
 
+def _emit_result(r: dict):
+    _emit({
+        "type": "result",
+        "method": r["method"],
+        "tokens_before": r["tokens_before"],
+        "tokens_after": r["tokens_after"],
+        "savings_pct": r["token_savings_pct"],
+        "status": r["status"],
+        "t": time.time(),
+    })
+
+
 def call_baseline(prompt: str, schema: dict) -> dict:
     """green-l-raw + vanilla extraction prompt. No optimization. Reference point."""
-    raw = _call("green-l-raw", BASELINE_SYSTEM, prompt)
+    raw = _call("green-l-raw", BASELINE_SYSTEM, prompt, _method="baseline")
     if raw.startswith("__API_ERROR__"):
-        return _result("baseline", raw, raw, {}, None, status="api_failed")
+        r = _result("baseline", raw, raw, {}, None, status="api_failed")
+        _emit_result(r); return r
     parsed = _safe_parse(raw)
-    # baseline "toon_output" is just the minified version of what the model returned
     toon = json.dumps(parsed, separators=(",", ":"), ensure_ascii=False) if parsed else raw
     if parsed is None:
-        return _result("baseline", raw, toon, {}, None, status="parse_failed")
-    return _result("baseline", raw, toon, {}, parsed)
+        r = _result("baseline", raw, toon, {}, None, status="parse_failed")
+        _emit_result(r); return r
+    r = _result("baseline", raw, toon, {}, parsed)
+    _emit_result(r); return r
 
 
 def call_postprocess(prompt: str, schema: dict) -> dict:
     """green-l-raw + vanilla prompt, then client-side TOON-encode the output."""
-    raw = _call("green-l-raw", BASELINE_SYSTEM, prompt)
+    raw = _call("green-l-raw", BASELINE_SYSTEM, prompt, _method="postprocess")
     if raw.startswith("__API_ERROR__"):
-        return _result("postprocess", raw, raw, {}, None, status="api_failed")
+        r = _result("postprocess", raw, raw, {}, None, status="api_failed")
+        _emit_result(r); return r
     parsed = _safe_parse(raw)
     if parsed is None:
-        return _result("postprocess", raw, raw, {}, None, status="parse_failed")
+        r = _result("postprocess", raw, raw, {}, None, status="parse_failed")
+        _emit_result(r); return r
     key_map = build_key_map(parsed)
     toon = encode(parsed, key_map)
     try:
         decoded = decode(toon, key_map)
     except Exception:
-        return _result("postprocess", raw, toon, key_map, parsed, status="decode_failed")
-    return _result("postprocess", raw, toon, key_map, decoded)
+        r = _result("postprocess", raw, toon, key_map, parsed, status="decode_failed")
+        _emit_result(r); return r
+    r = _result("postprocess", raw, toon, key_map, decoded)
+    _emit_result(r); return r
 
 
 def call_prompt_engineering(prompt: str, schema: dict) -> dict:
     """green-l with NO system prompt — its built-in GreenPT optimization is the system prompt."""
-    raw = _call("green-l", None, prompt)
+    raw = _call("green-l", None, prompt, _method="prompt_engineering")
     if raw.startswith("__API_ERROR__"):
-        return _result("prompt_engineering", raw, raw, {}, None, status="api_failed")
+        r = _result("prompt_engineering", raw, raw, {}, None, status="api_failed")
+        _emit_result(r); return r
     parsed = _safe_parse(raw)
     if parsed is None:
-        return _result("prompt_engineering", raw, raw, {}, None, status="parse_failed")
+        r = _result("prompt_engineering", raw, raw, {}, None, status="parse_failed")
+        _emit_result(r); return r
     toon = json.dumps(parsed, separators=(",", ":"), ensure_ascii=False)
-    return _result("prompt_engineering", raw, toon, {}, parsed)
+    r = _result("prompt_engineering", raw, toon, {}, parsed)
+    _emit_result(r); return r
 
 
 def call_combined(prompt: str, schema: dict) -> dict:
@@ -167,20 +229,22 @@ def call_combined(prompt: str, schema: dict) -> dict:
     """
     key_map = build_key_map(schema)
     user = _toon_user_prefix(key_map) + prompt
-    raw = _call("green-l", None, user)
+    raw = _call("green-l", None, user, _method="combined")
     if raw.startswith("__API_ERROR__"):
-        return _result("combined", raw, raw, key_map, None, status="api_failed")
+        r = _result("combined", raw, raw, key_map, None, status="api_failed")
+        _emit_result(r); return r
     parsed = _safe_parse(raw)
     if parsed is None:
-        return _result("combined", raw, raw, key_map, None, status="parse_failed")
+        r = _result("combined", raw, raw, key_map, None, status="parse_failed")
+        _emit_result(r); return r
     try:
-        # If the model used our short keys, decode restores them via inverted map;
-        # if it used long keys, decode is a no-op.
         decoded = decode(json.dumps(parsed), key_map)
         toon = encode(decoded, key_map)
     except Exception:
-        return _result("combined", raw, raw, key_map, parsed, status="decode_failed")
-    return _result("combined", raw, toon, key_map, decoded)
+        r = _result("combined", raw, raw, key_map, parsed, status="decode_failed")
+        _emit_result(r); return r
+    r = _result("combined", raw, toon, key_map, decoded)
+    _emit_result(r); return r
 
 
 METHODS = {
