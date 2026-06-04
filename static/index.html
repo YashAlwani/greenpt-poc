@@ -2,29 +2,50 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>GreenPT — Playground</title>
+  <title>GreenPT — Developer Console</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <span class="logo">▲</span>
-      <span class="name">GreenPT</span>
-      <span class="tag">Playground</span>
-    </div>
-    <div class="meta">
-      JSON optimization proxy &nbsp;·&nbsp;
-      <code>api.greenpt.ai/v1</code>
-    </div>
-  </header>
 
-  <main>
+<header>
+  <div class="brand">
+    <span class="logo">▲</span>
+    <span class="name">GreenPT</span>
+    <span class="tag">Developer Console</span>
+  </div>
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="playground">Playground</button>
+    <button class="tab-btn" data-tab="packets">
+      Packets
+      <span class="live-dot" id="live-dot"></span>
+    </button>
+    <button class="tab-btn" data-tab="stats">Stats</button>
+    <button class="tab-btn" data-tab="report">Report</button>
+    <button class="tab-btn" data-tab="explain">How it works</button>
+  </nav>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════ PLAYGROUND ═══ -->
+<div id="page-playground" class="page active">
+  <main class="two-col">
+
     <section class="panel input">
-      <h2>Input</h2>
+      <div class="panel-head">
+        <h2>Input</h2>
+        <div class="panel-actions">
+          <select id="example-select" title="Load a dataset example">
+            <option value="">Load example…</option>
+          </select>
+          <label class="file-btn" title="Import prompt from file">
+            Import
+            <input type="file" id="file-import" accept=".txt,.json,.md" />
+          </label>
+        </div>
+      </div>
 
       <label for="prompt">Prompt</label>
-      <textarea id="prompt" rows="10" placeholder="Paste the prompt you'd send to your LLM…">Extract invoice fields from the text below and return JSON.
+      <textarea id="prompt" rows="11" placeholder="Paste the prompt you'd send to your LLM…">Extract invoice fields from the text below and return JSON.
 
 ---
 Vendor: BluePeak Logistics
@@ -47,10 +68,10 @@ Return ONLY valid JSON matching the schema.</textarea>
       <label for="method">Method</label>
       <select id="method">
         <option value="auto" selected>auto (smart routing)</option>
-        <option value="baseline">baseline (green-l-raw)</option>
-        <option value="postprocess">postprocess (green-l-raw + TOON)</option>
-        <option value="prompt_engineering">prompt_engineering (green-l)</option>
-        <option value="combined">combined (green-l + TOON)</option>
+        <option value="baseline">baseline — green-l-raw, no optimization</option>
+        <option value="postprocess">postprocess — green-l-raw + TOON client-side</option>
+        <option value="prompt_engineering">prompt_engineering — green-l tuned model</option>
+        <option value="combined">combined — green-l + TOON (max compression)</option>
       </select>
 
       <button id="run-btn">Run optimization</button>
@@ -93,30 +114,202 @@ Return ONLY valid JSON matching the schema.</textarea>
           <summary>Decoded JSON (what your app receives)</summary>
           <pre id="decoded"></pre>
         </details>
-
         <details>
           <summary>TOON wire format (compressed string)</summary>
           <pre id="toon"></pre>
         </details>
-
         <details>
           <summary>Key map (sent once per session)</summary>
           <pre id="key-map"></pre>
         </details>
-
         <details>
           <summary>Raw model output</summary>
           <pre id="raw"></pre>
         </details>
       </div>
     </section>
+
   </main>
+</div>
 
-  <footer>
-    <span>v0.1 · benchmark POC</span>
-    <span><a href="https://github.com/YashAlwani/greenpt-poc" target="_blank">github</a></span>
-  </footer>
+<!-- ═══════════════════════════════════════════════════════ PACKETS ═══════ -->
+<div id="page-packets" class="page">
+  <div class="page-inner">
+    <div class="page-header">
+      <h2>Live API Packets</h2>
+      <p class="page-sub">Real-time stream of every call routed through GreenPT. Open <b>Playground</b> or run a <b>Report</b> to see activity here.</p>
+      <button id="clear-packets" class="btn-sm">Clear log</button>
+    </div>
+    <div class="packet-toolbar">
+      <span id="packet-status" class="packet-status connecting">Connecting…</span>
+      <span id="packet-count" class="packet-count">0 events</span>
+    </div>
+    <div id="packet-log" class="packet-log">
+      <div class="packet-empty">Waiting for API activity…</div>
+    </div>
+  </div>
+</div>
 
-  <script src="/static/app.js"></script>
+<!-- ═══════════════════════════════════════════════════════ STATS ═════════ -->
+<div id="page-stats" class="page">
+  <div class="page-inner">
+    <div class="page-header">
+      <h2>Benchmark Stats</h2>
+      <p class="page-sub">Results from the last benchmark run stored in <code>outputs/results.csv</code>.</p>
+      <button id="refresh-stats" class="btn-sm">Refresh</button>
+    </div>
+
+    <div id="stats-empty" class="empty" style="display:none">
+      No results yet. Generate a <b>Report</b> first to populate stats.
+    </div>
+
+    <div id="stats-content" style="display:none">
+      <div id="stats-summary" class="stats-summary"></div>
+
+      <h3 class="section-title">Method comparison</h3>
+      <div id="stats-method-table" class="stats-table-wrap"></div>
+
+      <h3 class="section-title">Token savings by method</h3>
+      <div id="stats-savings-chart" class="bar-chart"></div>
+
+      <h3 class="section-title">G-Eval quality score by method</h3>
+      <div id="stats-quality-chart" class="bar-chart"></div>
+
+      <h3 class="section-title">Savings by use case × method</h3>
+      <div id="stats-pivot-savings" class="stats-table-wrap"></div>
+
+      <h3 class="section-title">Quality by use case × method</h3>
+      <div id="stats-pivot-quality" class="stats-table-wrap"></div>
+
+      <h3 class="section-title">Quality &amp; failure breakdown</h3>
+      <div id="stats-qf" class="stats-table-wrap"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ REPORT ════════ -->
+<div id="page-report" class="page">
+  <div class="page-inner">
+    <div class="page-header">
+      <h2>Generate Report</h2>
+      <p class="page-sub">Select which dataset rows to benchmark. Only the chosen rows will be sent to the API — no need to run all 48.</p>
+    </div>
+
+    <div class="report-controls">
+      <button id="select-all" class="btn-sm">Select all</button>
+      <button id="deselect-all" class="btn-sm">Deselect all</button>
+      <span id="selected-count" class="selected-count">0 rows selected</span>
+      <button id="run-report-btn" class="btn-primary" disabled>Run &amp; generate PDF</button>
+      <a id="download-link" class="btn-download hidden" href="/api/download-report" target="_blank">Download PDF</a>
+    </div>
+
+    <div id="report-error" class="error hidden"></div>
+
+    <div id="dataset-list" class="dataset-list">
+      <div class="empty">Loading dataset…</div>
+    </div>
+
+    <div id="report-progress" class="report-progress hidden">
+      <div class="progress-header">
+        <span id="progress-label">Running benchmark…</span>
+        <span class="spinner"></span>
+      </div>
+      <div id="report-packet-log" class="packet-log small"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ EXPLAIN ═══════ -->
+<div id="page-explain" class="page">
+  <div class="page-inner explain-page">
+
+    <h2>How GreenPT works</h2>
+    <p class="lead">GreenPT is a token-reduction proxy for LLM structured-output calls. It sits between your app and any OpenAI-compatible endpoint, transparently shrinking JSON responses before they hit your billing meter.</p>
+
+    <div class="explain-grid">
+
+      <div class="explain-card">
+        <div class="card-icon">🗜</div>
+        <h3>TOON — Token Optimization Object Notation</h3>
+        <p>TOON is a lossless JSON compression scheme that shortens key names. Before each session a <em>key map</em> is negotiated:</p>
+        <pre class="explain-pre">{"invoice_number":"a","total_amount":"b",...}</pre>
+        <p>The model returns <code>{"a":"INV-001","b":7891.60}</code>. Your client decodes it back to full names in microseconds. Because JSON keys repeat across millions of calls, cutting them once saves tokens on every single request.</p>
+      </div>
+
+      <div class="explain-card">
+        <div class="card-icon">🔀</div>
+        <h3>Smart router</h3>
+        <p>The <code>auto</code> method inspects your schema and picks the optimal strategy:</p>
+        <ul>
+          <li><b>Tiny flat schema (≤ 2 short keys)</b> → baseline — compression overhead isn't worth it.</li>
+          <li><b>Deep / array-heavy schema</b> → combined — TOON wins on repetition.</li>
+          <li><b>Long key names</b> → postprocess — key shortening is the main win.</li>
+          <li><b>Everything else</b> → prompt_engineering.</li>
+        </ul>
+      </div>
+
+      <div class="explain-card method-card baseline">
+        <div class="method-badge">baseline</div>
+        <h3>green-l-raw + vanilla prompt</h3>
+        <p>Calls <code>green-l-raw</code> with a standard extraction system prompt. <b>No optimization.</b> This is the reference point — token savings for all other methods are measured against this.</p>
+      </div>
+
+      <div class="explain-card method-card postprocess">
+        <div class="method-badge">postprocess</div>
+        <h3>green-l-raw + TOON (client-side)</h3>
+        <p>Same baseline call, but the response is TOON-encoded <em>after</em> it arrives. The model never knows — the compression is invisible. Good when you can't change the model but still want wire savings.</p>
+      </div>
+
+      <div class="explain-card method-card prompt-eng">
+        <div class="method-badge">prompt_engineering</div>
+        <h3>green-l tuned model</h3>
+        <p>Uses <code>green-l</code>, which has GreenPT's optimization system prompt <em>baked in</em>. The model is already primed to return compact output. No TOON, but the model's inherent verbosity is reduced.</p>
+      </div>
+
+      <div class="explain-card method-card combined">
+        <div class="method-badge">combined</div>
+        <h3>green-l + TOON (maximum compression)</h3>
+        <p>Stacks both layers: the green-l tuned model plus TOON key-shortening instructions injected into the user message (green-l rejects system prompts — they're reserved for its built-in optimization). Maximum token reduction.</p>
+      </div>
+
+    </div>
+
+    <div class="explain-card flow-card">
+      <div class="card-icon">📦</div>
+      <h3>Request flow</h3>
+      <div class="flow">
+        <div class="flow-step">Your app sends<br/><code>prompt + schema</code></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">GreenPT proxy<br/>picks method</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">API call to<br/><code>api.greenpt.ai/v1</code></div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">Compressed JSON<br/>returned on wire</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">Decoded back<br/>to full JSON</div>
+      </div>
+      <p style="margin-top:12px;font-size:13px;color:var(--muted)">
+        The key map is sent once per session as session-level metadata — not on every request. Only the compressed payload travels on each call.
+      </p>
+    </div>
+
+    <div class="explain-card">
+      <div class="card-icon">📊</div>
+      <h3>Measuring savings</h3>
+      <p>Token counts use <code>tiktoken cl100k_base</code> on the raw model output (<em>tokens_before</em>) vs the on-wire compressed string (<em>tokens_after</em>).</p>
+      <pre class="explain-pre">savings % = (baseline_tokens − method_tokens) / baseline_tokens × 100</pre>
+      <p>Baseline is always 0%. Negative savings mean the method transmitted more tokens than baseline for that call — typically schema-level overhead on very short responses.</p>
+      <p>Quality is scored 1–5 by a second LLM judge using G-Eval on the schema-validated decoded output.</p>
+    </div>
+
+  </div>
+</div>
+
+<footer>
+  <span>GreenPT POC v0.1</span>
+  <span><a href="https://github.com/YashAlwani/greenpt-poc" target="_blank">github</a></span>
+</footer>
+
+<script src="/static/app.js"></script>
 </body>
 </html>

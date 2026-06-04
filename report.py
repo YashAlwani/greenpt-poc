@@ -29,7 +29,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-OUTPUT_DIR = r"D:\GreenPT\outputs"
+_HERE = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(_HERE, "outputs")
 RESULTS_CSV = os.path.join(OUTPUT_DIR, "results.csv")
 REPORT_PDF = os.path.join(OUTPUT_DIR, "report.pdf")
 CHART_SAVINGS = os.path.join(OUTPUT_DIR, "chart_savings.png")
