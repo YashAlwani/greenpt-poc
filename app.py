@@ -267,4 +267,4 @@ def download_report():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, threaded=True, use_reloader=False)
+    app.run(host="0.0.0.0", port=5123, threaded=True, use_reloader=False)

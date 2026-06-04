@@ -1,0 +1,11 @@
+services:
+  app:
+    container_name: greenpt-json-optimizer
+    build:
+      context: ..
+      dockerfile: docker-greenpt/Dockerfile
+    ports:
+      - "5123:5123"
+    env_file:
+      - ../.env
+    restart: unless-stopped
