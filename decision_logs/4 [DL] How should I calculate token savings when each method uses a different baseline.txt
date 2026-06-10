@@ -1,0 +1,159 @@
+﻿[DL] How should I calculate token savings when each method uses a different baseline?
+GreenPT POC
+
+
+1. Context
+
+Project: GreenPT benchmarking POC / day 2 (methodology — how the headline number is computed).
+
+Why this matters right now:
+The whole product pitch reduces to one number per method per use case: "X% savings vs baseline."
+If that number is computed wrong, the entire deck collapses. The first implementation computed
+savings per-method against itself — and the smoke run showed 0% savings on a combined row that
+clearly should have been positive. Zero on combined. That was the moment I knew the formula was
+wrong. Digging into why led to a formula rewrite that changed every number in the benchmark.
+
+Where this fits:
+Implements the headline number used in DL-07 (report). Makes the findings in DL-03 (prompt_
+engineering verbose) and DL-04 (combined overhead) visible — without the cross-method formula,
+both of those findings would have been hidden in near-zero noise.
+
+
+2. Research question
+
+How should token_savings_pct be calculated so the four methods can be compared apples-to-apples
+and the number reflects what a real customer experiences switching from baseline to method X?
+
+
+3. Current LO stage
+
+[x] Analyzing  — A2 identified self-relative savings math as a known benchmark failure mode
+                  before the pipeline ran
+[x] Designing  — wrote the cross-method formula
+[x] Realizing  — implemented in eval_node; baseline_tokens added to every results row as the
+                  explicit denominator (@nodes/eval.py:19-30)
+
+
+4. What makes a good decision here
+
+- baseline always reports 0% savings (it's the reference point — anything else is dishonest)
+- All non-baseline methods report savings against the same denominator per row
+- The number answers a real customer question: "if I switch from vanilla to method X for this
+  task, how many tokens do I save?"
+
+
+5. What I decided
+
+Compute savings cross-method, per row, using the baseline method's wire-format tokens as the
+denominator for every method in that row's group:
+
+    token_savings_pct = (baseline_tokens_after - method_tokens_after)
+                        / baseline_tokens_after * 100
+
+Reject the initial per-method self-relative implementation:
+
+    self_savings_pct  = (method_tokens_before - method_tokens_after)
+                        / method_tokens_before * 100
+
+The self-relative number is still computed and stored under self_savings_pct in results.csv —
+but it's a debug column, not the headline.
+
+
+6. Why this decision
+
+Method: Lab (caught the bug on a single row of the smoke run, traced it, swapped the formula,
+re-ran).
+
+The smoke run showed 0% savings on a combined row. Combined should be the strongest optimization
+method — 0% on any combined row was the first sign something was wrong.
+
+[IMAGE: smoke_run_combined_zero.png — Terminal output of the smoke run showing a combined row
+with self_savings_pct=0.0 despite the wire output being visibly shorter than baseline.]
+
+Digging in: the model happened to produce TOON-shaped output directly on that row, so
+tokens_before equalled tokens_after for the method call itself. The self-relative formula saw no
+compression because nothing happened client-side on that specific row. But the wire-format output
+was genuinely shorter than what baseline emitted for the same row — the cross-method comparison
+would have shown real savings. The self-relative formula missed it entirely.
+
+The same issue masked prompt_engineering on multiple rows — it was showing near-zero when it was
+actually sending MORE tokens than baseline (later confirmed as the DL-03 finding). The
+self-relative formula hid this by anchoring to the method's own input, not to a shared reference.
+
+The cross-method formula fixes this by anchoring every method in a row's group to one
+denominator: the baseline call's wire tokens for that row. The implementation in
+@nodes/eval.py:19-30:
+
+    baseline = method_results.get("baseline", {})
+    baseline_ref = baseline.get("tokens_after", 0) or \
+                   baseline.get("tokens_before", 0) or 1
+
+    vs_baseline_pct = round(
+        (baseline_ref - this_tokens) / baseline_ref * 100, 1
+    ) if baseline_ref else 0.0
+
+Both numbers are written to results.csv for every row:
+
+    token_savings_pct   # headline — vs baseline (the customer's number)
+    self_savings_pct    # debug    — per-method (catches encoding bugs)
+
+baseline_tokens is also its own column so any reader can hand-verify the math on any row without
+re-running the pipeline. Honest negative numbers fall out naturally: prompt_engineering's
+-15.0% mean savings is exactly what flagged the green-l verbosity finding in DL-03. The
+self-relative formula would have reported near-zero and the finding would have been invisible.
+
+What I'd recommend:
+Whenever a savings or improvement metric is being compared across multiple implementations of the
+same task, anchor every comparison to a single reference per row — and write that reference into
+the results table as its own column. You'll catch encoding bugs and dishonest baselines that
+self-relative math will hide, and any reviewer can spot-check a row in 30 seconds.
+
+GAP found:
+No row-level uncertainty estimate. Two runs of the same row at T=0 should give identical token
+counts, but if the API non-determines (cache miss, version bump), the savings number will silently
+shift. A sanity check — run the smoke set twice and compare token counts — is worth adding before
+any client delivery.
+
+
+7. Does this hold up
+
+- baseline always 0%:                ✅ confirmed across all 48 rows in the
+                                         full run (@outputs/results.csv)
+- Same denominator across methods:   ✅ baseline_tokens column captured per row
+                                         in results.csv; any row is hand-verifiable
+- Reflects real switching cost:      ✅ answers "I move my app from green-l-raw
+                                         + vanilla to method X; what do I save on
+                                         the wire?"
+
+Assumptions I'm making:
+The baseline call always succeeds for every row. If baseline fails (api_failed), the denominator
+falls back to tokens_before — which means inflated savings on a broken row. Edge case; full run
+had zero baseline failures.
+
+What surprised me:
+The bug was almost invisible — no crash, no warning, just quietly under-reported savings on the
+rows that mattered most. Seeing 0% on a combined row in the smoke run was the only signal.
+Without reviewing the smoke output row by row before the full run, the formula bug would have
+made it into the 192-row results and every chart in DL-09 would have been wrong.
+
+
+8. What this unlocks
+
+Next LO stage: Realizing -> Managing — the headline number on the report is now the right number,
+no asterisks needed.
+
+What I can now do:
+Negative savings appear honestly as negative numbers in results.csv. That visibility is what made
+the green-l verbosity finding (DL-03) possible.
+
+Ongoing monitoring:
+For any non-baseline row in results.csv, verify token_savings_pct against baseline_tokens
+manually if the number looks surprising. The columns are there specifically for that check.
+
+How I'll know this worked:
+Mean token_savings_pct for method == "baseline" is exactly 0.0 across all rows. Per-row
+token_savings_pct equals the formula above when computed by hand from the baseline_tokens column.
+
+
+*@nodes/eval.py · @outputs/results.csv*
+*@LO1: Analyzing · @LO3: Designing · @LO4: Realizing*

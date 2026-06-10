@@ -1,0 +1,109 @@
+ANALYZING EVIDENCE — A3
+Pipeline Framework Analysis: LangGraph vs Alternatives
+GreenPT POC / Pre-build research
+
+From: @decision_logs/A1_greenpt_api_landscape_scan.txt · @decision_logs/A2_benchmark_design_research.txt
+
+
+Research question
+-----------------
+What's the right runtime for a benchmark pipeline that needs to loop over rows, run 4 tools per
+row, score each row, accumulate results — and be readable to a non-engineer as a diagram?
+
+
+Options evaluated
+-----------------
+
+Option A: Custom for-loop in run.py (no framework)
+
+   A plain Python for-loop over rows, calling each method function in sequence, appending
+   results to a list, dumping to CSV at the end.
+
+   Pros: minimal dependencies, plain Python stack traces, fastest to write.
+   Cons: no state management (manual dicts); no visualization of the pipeline for a client demo;
+         extending to 5 methods or parallelism requires touching run.py; "it's a for-loop" is not
+         a slide.
+
+   Verdict: works but does not serve the demo purpose.
+
+
+Option B: LangChain AgentExecutor chain
+
+   Wire a chain of AgentExecutors: one loads data, one runs methods, one scores.
+
+   Pros: well-documented, many examples; per-step output parsing built in.
+   Cons: AgentExecutor state is opaque between executors; the chain mental model implies linear
+         flow but the per-row loop still needs a for-loop wrapper; adds a reasoning step that's
+         not needed; ~120 LoC for the same logic LangGraph does in ~80 LoC.
+
+   Verdict: more complexity for no added capability.
+
+
+Option C: LangGraph StateGraph
+
+   Define a TypedDict (BenchmarkState), three nodes (simulate / greentpt / eval), and a
+   conditional edge that loops back to simulate while rows_remaining is non-empty.
+
+   Pros: explicit typed state — every key visible, every transition one line; the graph IS the
+         methodology diagram; conditional edge handles the per-row loop natively; nodes are
+         isolated (<60 LoC each); different model tiers per node are natural.
+   Cons: newer dependency (API still evolving as of mid-2024); adds ~4 MB of dependencies;
+         conditional edges can be confusing on first read.
+
+   Verdict: best fit. The graph structure doubles as the client presentation diagram.
+
+
+Option D: Prefect / Airflow / Dagster workflow
+
+   Use a proper workflow orchestration tool.
+
+   Pros: production-grade monitoring, retries, scheduling; visual DAG out of the box.
+   Cons: massive overhead for a 15-minute benchmark run; adds a server process; overkill for a
+         2-day POC with one developer.
+
+   Verdict: right scope for production, wrong scope here.
+
+
+Why LangGraph
+-------------
+Method: Library (LangGraph docs + AgentExecutor migration guide + Prefect comparison blog),
+Showroom (built the 3-node graph specifically to make the methodology visible as a diagram).
+
+The real question wasn't LangGraph vs alternatives — it was figuring out the right decomposition
+inside LangGraph: what belongs in which node, and where state lives. The three-node split:
+simulate pops a row and sets it as current_row (no model call), greentpt runs all four method
+tools against current_row (no judging), eval scores and decides whether to continue (no
+optimization calls). Each node has one job. Each node reads and writes to BenchmarkState
+(@state.py) — a TypedDict where every key is named and typed.
+
+The graph IS the slide. When a client asks "how do you know the savings number is real?", the
+answer is "here's the graph — this node runs your prompt through four methods in parallel, this
+node judges the output with a model that isn't GreenPT." That answer requires an explicit graph
+with named nodes.
+
+The conditional edge expresses the per-row loop without a for-loop in run.py:
+
+    g.add_conditional_edges("eval", should_continue,
+                            {"simulate": "simulate", END: END})
+
+run.py becomes a single graph.invoke() call. The loop counter is gone from the application code
+entirely — it lives in the graph definition where it's visible and typed.
+
+What I'd recommend:
+When choosing between a framework and a plain loop for a benchmark, ask whether the methodology
+story is the deliverable. If the deliverable is just a CSV, a for-loop is fine. If the
+deliverable is a sales conversation where you need to explain the methodology in 30 seconds, the
+framework that produces the diagram is the right choice — even if it takes twice as long to set
+up.
+
+
+Sources
+-------
+- LangGraph documentation (conceptual guide: StateGraph, conditional edges, node functions)
+- LangChain AgentExecutor source code and migration guide to LangGraph
+- Prefect 3.0 "should I use Prefect or LangGraph" comparison (Prefect blog)
+- Compared GitHub star velocity: LangGraph growing faster than AgentExecutors (as of benchmarking date)
+
+
+*@graph.py · @state.py · @nodes/simulate.py · @nodes/greentpt.py · @nodes/eval.py*
+*@LO1: Analyzing*

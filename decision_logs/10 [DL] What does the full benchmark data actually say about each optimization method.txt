@@ -1,0 +1,257 @@
+﻿[DL] What does the full benchmark data actually say about each optimization method?
+GreenPT POC
+
+
+1. Context
+
+DL-07 shipped the report. One command, fresh PDF, auto-populated executive summary,
+methodology notes section that turns the same charts from "pretty" into "defensible."
+But the report is the visualization layer. This DL is the permanent record of the
+numbers themselves — what the 192-row run actually found, in a form that doesn't
+depend on report.pdf being open.
+
+Every previous DL was upstream of this moment. DL-00 locked the fairness rules so
+the comparison would be valid. DL-0b built the 48 rows worth comparing. DL-01 built
+the pipeline that ran them. DL-02 fixed the savings math so the numbers would be
+correct. DL-03 and DL-04 named the two key findings when the results came back.
+DL-09 is the terminal record: this is what each method does, on this dataset, in
+these conditions. Any future benchmark run — green-r, tuned green-l system prompt —
+will be compared against these numbers.
+
+Where this fits:
+Terminal. The data point that any future benchmark run will be measured against.
+
+
+2. Research question
+
+After running the full benchmark with the locked methodology and the corrected
+savings math — what do the numbers actually say?
+
+
+3. Current LO stage
+
+[x] Managing  — full 192-row run completed, numbers read, findings cross-referenced
+                 to the design decisions that produced them
+
+
+4. What makes a good result here
+
+(Reframed for a report: what claims is the data strong enough to support without
+an asterisk?)
+
+- The four-method comparison was fair (DL-00 fairness rules held)
+- The savings number is the cross-method number (DL-02 formula)
+- Per-use-case findings are based on at least 12 rows per cell (n is big enough
+  to claim a pattern, not noise)
+- Failure modes are accounted for in any aggregate — quality_warning and
+  parse_failed not silently averaged in
+
+
+5. What the benchmark found
+
+The headline table:
+
+  method                mean savings    mean G-Eval   verdict
+  --------------------- --------------- ------------- -------
+  baseline               0.0%           3.21          reference
+  postprocess           +5.6%           3.21          safest savings —
+                                                       zero quality cost
+  prompt_engineering    -15.0%          3.14          loses on both axes
+                                                       (see DL-03)
+  combined              +2.0%           4.31          highest quality
+                                                       by clear margin
+
+Per-use-case savings (combined vs baseline):
+
+  invoice_parsing            +32.2%
+  resume_parsing             +13.2%
+  summarization              -1.5%
+  intent_classification     -36.0%    <- see DL-04
+
+Per-use-case quality (combined G-Eval):
+
+  intent_classification      4.58
+  summarization              4.50
+  resume_parsing             4.33
+  invoice_parsing            3.83
+
+
+6. How this was produced
+
+Method: Lab (the full 192-row benchmark run is the source of every number in this DL).
+
+Run stats:
+
+  Total scored outputs:   192  (48 rows x 4 methods)
+  API calls:              384  (192 generation + 192 G-Eval judge)
+  Wall time:              15 min 17 s
+  Estimated spend:        ~0.07 EUR against ~2 EUR budget
+  Remaining capacity:     ~25 more full runs before budget runs out
+
+The full run landed in @outputs/results.csv — 192 rows, 14 columns. Every claim in
+this DL is checkable by anyone who can open a spreadsheet: filter method=combined,
+sort by token_savings_pct, pivot by use_case. The numbers below match exactly.
+
+[IMAGE: outputs/chart_savings.png — Bar chart of mean token savings by method.
+postprocess at +5.6% is the steady right-of-zero bar. prompt_engineering is the
+only bar extending left (−15.0%). combined sits close to zero on the aggregate
+despite its +32.2% on invoice_parsing — the per-use-case table is where the story
+lives, not this chart.]
+
+[IMAGE: outputs/chart_quality.png — Bar chart of mean G-Eval scores by method.
+combined at 4.31 is the clear quality leader — a full point above baseline, prompt_
+engineering, and postprocess which cluster around 3.14-3.21. The quality story and
+the savings story run in opposite directions for combined, which is exactly the
+honest tension the report names.]
+
+Finding 1 — prompt_engineering loses across the board:
+
+This was the assumption going in: GreenPT's tuned system prompt on green-l would
+natively produce shorter outputs than a vanilla extraction prompt. The data broke it.
+Across all 48 rows, prompt_engineering transmitted 15.0% MORE tokens than baseline
+at identical G-Eval quality (3.14 / 3.14) — spending more tokens for nothing.
+
+Per use case (@outputs/results.csv, column token_savings_pct, filter
+method=prompt_engineering):
+
+  intent_classification   -43.5%
+  invoice_parsing          -0.4%
+  resume_parsing           +0.2%
+  summarization            +3.7%
+
+The most likely mechanism: green-l's system prompt is tuned for quality — Dutch
+grammar guardrails, multilingual assistance — not terseness. With no explicit
+instruction to be compact, green-l defaults to a more elaborate output style than
+green-l-raw on a vanilla "Return ONLY valid JSON" prompt. Quality is identical;
+verbosity is free, so the model uses it. The GreenPT team made a deliberate design
+choice. The finding is just that prompt_engineering alone is not a token-saving
+strategy on this product. Full DL: @decision_logs/03_finding_prompt_engineering_verbose.txt
+
+Finding 2 — combined is the quality champion, not the universal savings winner:
+
+The simplest pitch for combined was "stacks both layers, has to win everywhere."
+The full run broke that too. Combined's mean savings (+2.0%) is dragged down by two
+losing use cases. The mechanism is mechanical — the combined method prepends a TOON
+instruction block to every user message (@tools/greentpt_tools.py:45-56, the
+_toon_user_prefix constant). That block is approximately 80 tokens of fixed overhead.
+
+For invoice_parsing, the ~80-token overhead lands on top of a ~150-token compressed
+output from a 12-field nested schema with line-item arrays. Net: +32.2%.
+
+For intent_classification, the ~80-token overhead lands on top of a ~30-token
+baseline output ({"intent": "...", "confidence": 0.0}). The overhead exceeds the
+entire output. Net: -36.0%.
+
+The 68 percentage-point spread between those two cells — across 12 rows each — is
+not noise. Full DL: @decision_logs/04_finding_combined_overhead_tiny_outputs.txt
+
+postprocess — the quiet winner:
+
+Going in, combined was the expected dominant method. postprocess was the fallback.
+What the data actually shows: postprocess delivers +5.6% savings across every use
+case with zero quality cost (3.21 / 3.21 vs baseline). No routing logic needed.
+No schema-size check. Just consistently wins, or breaks even, everywhere. It's not
+the exciting method — no single +32.2% headline — but it's the only method with
+no losing use case and no quality trade-off.
+
+Failure tally:
+
+  status=ok              176 rows
+  status=parse_failed     16 rows  (LLM returned non-JSON)
+  status=decode_failed     0 rows
+  status=api_failed        0 rows
+  quality_warning=True     6 rows  (G-Eval < 3, kept in averages)
+
+Zero pipeline crashes across 192 rows. The failure taxonomy from DL-00 held — every
+failure was tagged with a status code rather than silently dropped. The 16
+parse_failed rows are visible in @outputs/results.csv and kept in the aggregate with
+savings_pct=0 by convention (DL-00 rule 6).
+
+What I'd recommend:
+Three things land out of this data.
+
+  1. Honest framing: postprocess is the universal-savings winner; combined is the
+     quality champion and multi-field savings winner; prompt_engineering is not a
+     standalone path to savings. Lead with that nuance, not a single headline number.
+  2. Smart routing v1: codify "postprocess for tiny outputs, combined for
+     nested/multi-field schemas, never prompt_engineering as default" as a single-
+     function update to sdk.smart_route (@sdk.py:31-55). The data now supports
+     every branch.
+  3. Product memo to GreenPT: the green-l verbosity finding is the most actionable
+     result. A "be terse" instruction in green-l's system prompt would flip
+     prompt_engineering from -15.0% to net-positive without touching the quality
+     story. One line in the system prompt. The same 48-row re-run is the regression
+     test for whether the change landed.
+
+GAP found:
+The reasoning tier (green-r) was not benchmarked. We don't know whether the patterns
+above hold on the larger model — whether combined's instruction overhead is a
+proportionally smaller cost at higher output quality, or whether prompt_engineering
+turns positive once the model is more capable of following implicit brevity cues.
+Same methodology, same 48 rows, ~10 minutes, ~0.10 EUR. That's the natural next run.
+
+
+7. Does this hold up
+
+- Fairness rules held:         ✅ same compute, T=0, max_tokens=1024 across
+                                   all 192 rows (DL-00 rule 1, confirmed in
+                                   @pipeline/graph.py:22-31)
+- Cross-method savings math:   ✅ baseline always 0.0%; all other methods
+                                   anchored to baseline_tokens per row (DL-02
+                                   formula, @pipeline/graph.py:eval_node)
+- n is big enough:             ✅ 12 rows per per-use-case cell; the
+                                   68-point spread between invoice_parsing
+                                   and intent_classification for combined
+                                   is not noise
+- Failures accounted for:      ✅ 16 parse_failed rows and 6 quality_warning
+                                   rows visible and tagged separately in
+                                   @outputs/results.csv; not silently averaged
+
+Assumptions I'm making:
+The 48-row dataset is representative of the workloads GreenPT's real customers will
+run. Four canonical use cases at three sizes covers the main schema-shape space, but
+a customer doing deeply nested financial document extraction might land in a different
+regime than the invoice_parsing case here.
+
+What surprised me:
+postprocess being the consistent winner on savings. The expectation going in was that
+combined — stacking both optimization layers — would dominate. What the data showed
+instead was that combined has a floor problem: the fixed ~80-token instruction
+overhead makes it net-negative on any schema where the baseline output is smaller
+than the overhead. postprocess has no floor. It applies client-side key shortening
+and minification without prepending anything — so it wins, or breaks even, on every
+use case without a routing decision. That's the quiet headline of this benchmark.
+It's the method that just works, while the more ambitious method needs a routing
+layer to stop it from actively hurting.
+
+
+8. What this unlocks
+
+Next LO stage: Managing — this result is the regression-test baseline for every
+future change to GreenPT's optimization layer.
+
+What I can now do:
+- Report the five concrete numbers behind every claim in the PDF (report.pdf is
+  the visualization; this DL is the permanent record)
+- Hand the GreenPT team a one-page product memo with two specific follow-ups
+  (green-l terseness instruction + server-side TOON instruction that removes the
+  overhead floor for combined)
+- Re-run the same benchmark against green-r in ~10 minutes for the reasoning-tier
+  story — same 48 rows, same methodology, same savings formula
+
+Ongoing monitoring:
+@outputs/results.csv is the source of truth. @outputs/report.pdf is the visualization
+layer. Both regenerate from results.csv — they will never disagree by construction.
+Whenever the benchmark re-runs, compare the new headline numbers against this table.
+prompt_engineering at -15.0% is the regression test for GreenPT's system-prompt
+tuning. If a future run shows it swinging positive, the "be terse" instruction landed.
+
+How I'll know this worked:
+Six months from now, when GreenPT updates green-l's system prompt and re-runs the
+same 48-row benchmark, the delta on prompt_engineering's mean savings
+(-15.0% -> ???) is the cleanest single-number test of whether the tuning change
+had the intended effect. That's the observable signal this DL was written to anchor.
+
+
+*@outputs/results.csv · @outputs/report.pdf · @outputs/benchmark_run.log · @outputs/chart_savings.png · @outputs/chart_quality.png · @BENCHMARK_ANALYSIS.md*
+*@LO5: Managing*

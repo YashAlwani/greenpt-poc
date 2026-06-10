@@ -1,0 +1,12 @@
+.venv/
+.git/
+.idea/
+.env
+.env.local
+__pycache__/
+*.py[cod]
+*.log
+outputs/
+.DS_Store
+decisions/
+.claude/

@@ -1,0 +1,77 @@
+ANALYZING EVIDENCE — A1
+GreenPT API Landscape Scan
+GreenPT POC / Pre-build research
+
+
+Research question
+-----------------
+Is GreenPT's value prop in the model, the system prompt, or the wire format — and what does that
+mean for how the benchmark has to be designed?
+
+
+What I found
+------------
+
+1. Two model surfaces, one underlying model
+
+   green-l-raw  ->  Mistral Small 3.2 24B with NO GreenPT system prompt
+   green-l      ->  Mistral Small 3.2 24B WITH GreenPT's tuned system prompt
+
+   Both endpoints are on the same hardware and billing tier. The only variable between green-l-raw
+   and green-l is the system prompt. Any token difference on a method that uses green-l vs
+   green-l-raw is attributable to the system prompt alone — not a different model, not a different
+   hardware tier, not a different quota.
+
+2. TOON is client-side, not server-side
+
+   TOON (Token-Optimized Object Notation) runs locally (@toon.py). The server never sees the
+   abbreviation schema unless it's sent in the user message. The postprocess method compresses
+   output after the fact with zero API cost. The combined method sends the key_map in the user
+   message prefix so the model can use short keys during generation.
+
+3. Pricing is per token on the wire
+
+   GreenPT bills on the token count that hits the model. A key_map sent in the user message is
+   billed. A key_map stored only on the client is not. This means the per-session vs per-call
+   accounting decision directly affects whether the savings number is honest. Amortizing the
+   key_map over many calls would inflate the savings percentage.
+
+4. green-l rejects system prompts
+
+   Any additional system prompt sent by the client is silently dropped. Confirmed with a live
+   test: sent a system prompt to green-l, checked the response — it was gone, no error. Direct
+   consequence: TOON abbreviation instructions cannot ride in the system prompt. They must go
+   in the user message prefix, or the model will not abbreviate keys at all.
+
+
+Why this mattered
+-----------------
+Method: Library (GreenPT model catalog + billing FAQ + toon.py source), Lab (live system
+prompt drop test against green-l endpoint).
+
+The green-l / green-l-raw distinction is the benchmark's foundation. Baseline and postprocess
+must go through green-l-raw (no GreenPT prompt contamination), while prompt_engineering and
+combined must go through green-l (that's the product layer being tested). Routing all four
+through green-l would mean baseline already has GreenPT's tuning applied — any savings over
+"baseline" would be measuring the tuning against itself.
+
+The TOON client-side finding changed the combined method's overhead accounting. The instruction
+block in the user message — approximately 80 tokens of key_map and abbreviation rules — is a
+real cost billed to the customer. That overhead is the mechanical cause of the combined method
+losing on tiny outputs (confirmed in DL-04).
+
+The system-prompt drop test was the most consequential single check of the project. If not
+tested, the combined method would have been designed to pass TOON instructions in the system
+prompt. Every combined row would have produced uncompressed output with no error — identical
+in appearance to a TOON decode error.
+
+What I'd recommend:
+Before benchmarking any black-box API, spend an hour building a one-request test harness that
+confirms what the API actually does at the edges — specifically: (1) how the prompt layer
+interacts with client-provided prompts, and (2) exactly what the billing meter counts. The time
+cost of that hour is infinitely cheaper than discovering a structural assumption was wrong after
+192 rows are in the CSV.
+
+
+*@toon.py · @tools/greentpt_tools.py · @sdk.py*
+*@LO1: Analyzing*

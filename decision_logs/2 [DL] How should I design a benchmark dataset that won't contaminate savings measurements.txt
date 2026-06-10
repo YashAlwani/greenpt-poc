@@ -1,0 +1,231 @@
+﻿[DL] How should I design a benchmark dataset that won't contaminate savings measurements?
+GreenPT POC
+
+
+1. Context
+
+DL-00 locked the ruleset: same compute, T=0, cross-method savings math, four methods compared on equal ground. But a ruleset with no rows to run against is just a document. Before the pipeline could fire a single optimization call, there had to be something to optimize — a dataset designed carefully enough that savings numbers would reflect method quality, not prompt phrasing variance or accidental schema drift.
+
+That design question turned out to be more consequential than it looked. The first framing — "generate a bunch of prompts and run them through the methods" — is wrong in a subtle way. Prompts are not the variable the optimizer acts on. The output JSON schema is. A 300-token invoice prompt asking for two fields and a 300-token invoice prompt asking for twelve nested line-item objects are completely different benchmarks even though the input length is identical. The schema is where the optimizer wins or loses.
+
+The moment that reframe landed, the dataset design followed quickly. This DL covers every decision behind generated_llm_dataset.csv — the 48 rows that DL-01 through DL-07 all depend on.
+
+Where this fits:
+Foundational — same tier as DL-00. The ruleset locks the comparison methodology; this DL locks what gets compared. Every per-use-case finding in DL-03 and DL-04 traces back to whether these 48 rows were designed to surface those findings.
+
+
+2. Research question
+
+How should a benchmark dataset be designed so that token-optimization savings are
+measurable, comparable across four methods, and not contaminated by prompt
+variance or schema drift?
+
+
+3. Current LO stage
+
+[x] Analyzing  — reviewed use case candidates across three categories
+                  (structured extraction, text classification, content generation
+                  with metadata); selected 4 use cases against optimization-
+                  ceiling criteria using SCRUM-27 as the scope document
+[x] Designing  — locked three decisions: use case selection, size definitions,
+                  generation approach (hardcoded schemas + agent-generated source
+                  text)
+[x] Realizing  — generate_dataset.py ran against Anthropic API; produced
+                  generated_llm_dataset.csv (48 rows, ready for benchmark)
+
+
+4. What makes a good decision here
+
+- Each use case has a measurable, distinct optimization profile: at least one
+  use case where optimization saves tokens (stress test), at least one where it
+  should do nothing (no-op control)
+- Size (S/M/L) is defined in input tokens — concrete enough for the generation
+  script to enforce without ambiguity
+- Reference outputs are schema-only: G-Eval judges structure and field
+  completeness, not exact string values — so the same benchmark can re-run on
+  deterministic and non-deterministic models
+- Schemas are stable across runs — the benchmark can re-run without the ground
+  truth drifting between executions
+- Content feels realistic: prompts that look like toy examples produce toy-
+  example results
+
+
+5. What I decided
+
+Four use cases, 4 rows per size, 3 sizes each = 48 rows total.
+
+  use_case                optimization_ceiling    role in benchmark
+  ----------------------  --------------------    -----------------------
+  invoice_parsing         high (arrays of         savings stress test
+                           line-item objects)
+  resume_parsing          medium-high (deep        nested-schema test
+                           nesting: experience[],
+                           education[], skills[])
+  summarization           medium (mixed depth:     quality-vs-savings
+                           summary + metadata)     trade-off test
+  intent_classification   minimal (flat 2-3       no-op control
+                           fields)
+
+Size definitions in input tokens:
+  S:  300-500
+  M:  500-700
+  L:  800-1000
+
+Reference output format: schema-only (field names + types, no fixed values).
+Generation approach: schemas hardcoded per use_case x size; source text
+(invoice body, resume content, article, user message) agent-generated via
+Anthropic API in generate_dataset.py.
+
+
+6. Why this decision
+
+Method: Library (Jira SCRUM-27 + use case landscape analysis), Lab (one example
+row built and verified before the script was written).
+
+Use case selection — why these four:
+
+The decision started from the optimization ceiling, not from what seemed realistic.
+The question was: what schema shapes exercise the optimizer across its full range?
+Arrays of line-item objects (invoice_parsing) are where TOON compression earns the
+most — repetition across keys in a repeating structure is exactly what key shortening
+targets. Deep nesting (resume_parsing: experience[], education[], skills[]) is a
+different shape — more levels, more field names, but less raw repetition. Mixed depth
+with a quality requirement (summarization) tests whether the optimizer can handle
+a schema where some fields are extractive and others require generation. And a
+minimal flat schema (intent_classification: {"intent": "...", "confidence": 0.0})
+is the no-op control — if the optimizer actively hurts here, that's a routing signal,
+not a failure.
+
+Five criteria drove the final selection (@converstation.txt — the planning thread
+where these cases were locked before generate_dataset.py was opened):
+
+  1. Optimization ceiling must vary. Without a no-op control you can't prove the
+     optimizer knows when not to act.
+  2. Schema complexity must span the full range. Arrays, deep nesting, mixed, flat —
+     each shape exercises a different part of the optimizer.
+  3. Quality degradation must be detectable. Schemas need enough fields that an
+     over-aggressive optimizer registers as a real G-Eval quality drop.
+  4. Schemas are hardcoded, not generated. Same ground truth on every re-run.
+  5. Prompts must not over-constrain the schema. "Extract key invoice details as
+     JSON" — not a list of required fields. The optimizer needs room to act.
+
+Size definitions — why token ranges:
+
+S/M/L were defined in input tokens, not word count or character count, because
+token count is what GreenPT actually bills against. The ranges (S: 300-500,
+M: 500-700, L: 800-1000) were chosen to produce meaningfully different schema
+complexity at each size — a large invoice has more line items, a large resume has
+more experience entries — without exceeding the context window constraints that
+would make the benchmark non-transferable to other model tiers.
+
+Generation approach — why hybrid:
+
+The debate was between fully hardcoded rows and fully agent-generated rows.
+Fully hardcoded rows would produce samey prompts that felt like test fixtures,
+not real extraction targets. Fully agent-generated rows would let schemas drift —
+if the LLM writes both the source text and the extraction schema, the schema
+is different every run and G-Eval can't compare across runs. The hybrid fixed that.
+
+Schemas are hardcoded in generate_dataset.py — the invoice schema, the resume
+schema, the summarization schema, the intent schema. Same on every re-run. The LLM
+(Claude Sonnet via Anthropic API) wrote the source text: the invoice body, the
+resume content, the article, the user message. That content varies run-to-run,
+which is fine. The schema it gets evaluated against doesn't, which is what matters.
+
+[IMAGE: generated_llm_dataset.csv — First 8 rows showing use_case, size, prompt,
+and schema columns. The prompt column contains realistic agent-generated invoice
+and resume text; the schema column contains the hardcoded JSON structure each row
+is evaluated against. The use_case and size columns show the 4x3 grid before the
+rows are multiplied out to 48.]
+
+Each row was generated by a single Claude call with a structured prompt that specified
+use case, size target, and realistic context. Total generation: 48 calls, ~30,000
+tokens, ~$0.30-$0.35 at Sonnet pricing. One-time spend. The output was written
+directly to generated_llm_dataset.csv and has not been regenerated since — same
+48 prompts across every benchmark re-run.
+
+What I'd recommend:
+For any benchmarking dataset that will be re-run more than once, lock the reference
+schema before writing the generation script. If the schema drifts between runs,
+G-Eval is rating against different criteria each time — you lose the ability to
+compare results across runs entirely. Hardcoded schemas are the cheapest form of
+schema governance that exists. The hybrid pattern — hardcoded schema, agent-generated
+source text — is the right balance for any benchmark that needs both reproducibility
+and content variety.
+
+GAP found:
+The initial plan was 3 rows per size per use case (36 total). The final dataset has
+4 rows per size per use case (48 total). The extra row per cell raises per-cell n
+from 9 to 12 — enough to make the per-use-case patterns in DL-04 hold up to a
+"is this noise?" challenge. DL-09 confirms: a 68-percentage-point spread between
+invoice_parsing (+32.2%) and intent_classification (-36.0%) for combined across
+12 rows per cell is not noise.
+
+
+7. Does this hold up
+
+- Distinct optimization profiles:    ✅ intent_classification as no-op
+                                          confirmed: combined actively hurts
+                                          on tiny outputs (DL-03: -15%,
+                                          DL-04: -36% for combined). The no-op
+                                          control was the most informative cell
+                                          in the entire benchmark.
+- Concrete size definitions:         ✅ S/M/L token ranges held; size
+                                          breakdowns in BENCHMARK_ANALYSIS.md
+- Schema-only reference outputs:     ✅ G-Eval used structure + completeness
+                                          as quality signal throughout; no
+                                          exact string matching required
+- Schema stability across runs:      ✅ hardcoded in generate_dataset.py —
+                                          same schema on every re-run, G-Eval
+                                          comparing against fixed ground truth
+- Realistic content:                 ✅ agent-generated source texts varied
+                                          in phrasing and content; no two rows
+                                          read the same
+
+Assumptions I'm making:
+The 48-row dataset is representative of GreenPT's real customer workloads. Four
+canonical use cases at three sizes covers the main schema-shape space, but customers
+doing deeply nested financial document extraction or multi-document summarization may
+land outside this envelope.
+
+What surprised me:
+How much the no-op case (intent_classification) ended up mattering for the findings.
+It was included to prove the optimizer knows when not to act. What it revealed instead
+was that both prompt_engineering and combined actively hurt on tiny outputs — the
+no-op control became the most informative cell in the entire benchmark. A case
+designed to show nothing became the case that showed the most. That inversion is
+worth naming: the design criterion was "has a minimal optimization ceiling." The
+finding was "the optimizer actively makes things worse here, and the mechanism is
+traceable to a fixed ~80-token instruction overhead." Those are different things.
+The dataset didn't just confirm the hypothesis — it broke it in an interesting direction.
+
+
+8. What this unlocks
+
+Next LO stage: Designing -> DL-00 (POC ruleset) and DL-01 (LangGraph pipeline
+architecture) — the pipeline was built to process these 48 rows across all four
+methods.
+
+What I can now do:
+- Run the benchmark against the 48-row dataset and get a defensible per-cell
+  comparison (192 rows total — 48 prompts x 4 methods)
+- Re-run generate_dataset.py at any time to produce a fresh 48-row dataset with
+  the same schemas but different generated source content
+- Extend to green-r: same 48 rows, same methodology, different model tier (the
+  natural next benchmark run per DL-09)
+
+Ongoing monitoring:
+generated_llm_dataset.csv is the source of truth for the input side. If the benchmark
+ever re-runs with different prompts, the per-use-case findings in DL-03 and DL-04
+will not be directly comparable to the current numbers. Re-generate only when
+intentionally refreshing the dataset, not as a side effect of other changes.
+
+How I'll know this worked:
+The 48 rows produce a spread in per-use-case savings that looks like a real finding,
+not noise. DL-09 confirms: 68 percentage-point spread between invoice_parsing (+32.2%)
+and intent_classification (-36.0%) for combined. That's the spread this dataset was
+designed to make visible.
+
+
+*@generate_dataset.py · @generated_llm_dataset.csv · @converstation.txt*
+*@LO1: Analyzing · @LO3: Designing · @LO4: Realizing*

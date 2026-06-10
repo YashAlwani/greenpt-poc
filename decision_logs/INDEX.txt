@@ -1,0 +1,97 @@
+GreenPT POC — Decision Log Index
+================================
+
+READING GUIDE
+─────────────
+10 min: STORY.md + DL-03 + DL-04 — the full arc and both findings
+30 min: Add DL-00, DL-0b, DL-01, DL-09 — scope, dataset, architecture, results
+Full:   A1→A4, ADV1→ADV3, DL-00→DL-09 in order (research → advice → build →
+        run → findings → artifacts)
+
+
+Full story: scan the landscape → analyze options → advise on approach →
+lock the rules → build the runtime → fix the math → run the benchmark →
+find the surprises → ship the artifacts.
+
+
+ANALYZING EVIDENCE (pre-build research)
+----------------------------------------
+A1   A1_greenpt_api_landscape_scan.txt          API research       Analyzing
+A2   A2_benchmark_design_research.txt           methodology        Analyzing
+A3   A3_pipeline_framework_analysis.txt         framework compare  Analyzing
+A4   A4_ui_options_analysis.txt                 UI compare         Analyzing
+
+
+ADVISING EVIDENCE (pre-build recommendations)
+----------------------------------------------
+ADV1 ADV1_pipeline_architecture_advisory.txt   recommendation     Advising
+ADV2 ADV2_sdk_design_advisory.txt              recommendation     Advising
+ADV3 ADV3_go_to_market_artifacts_advisory.txt  recommendation     Advising
+
+
+DECISION LOGS (design → realization → findings)
+------------------------------------------------
+#    File                                             Type           Stage
+---  -----------------------------------------------  -------------  ------------------
+00   00_poc_scope_and_ruleset.txt                     design         Analyzing → Realizing
+0b   0b_dataset_generation.txt                       design         Analyzing → Realizing
+     KEY: schema-first design; hardcoded schemas + agent-generated content = 48 rows
+01   01_langgraph_3_agent_architecture.txt            design         Designing → Realizing
+02   02_cross_method_savings_calculation.txt          methodology    Designing → Realizing
+03   03_finding_prompt_engineering_verbose.txt        FINDING ❌     Realizing → Managing
+     KEY: green-l sends 15% MORE tokens than baseline at identical quality
+04   04_finding_combined_overhead_tiny_outputs.txt    FINDING ❌     Realizing → Managing
+     KEY: combined saves +32% on invoices, loses −36% on intent tasks (fixed overhead)
+05   05_smart_routing_v0_sdk.txt                      DX             Designing → Realizing
+06   06_flask_playground_ui.txt                       DX / artifact  Designing → Realizing
+07   07_pdf_report_generation.txt                     artifact       Designing → Realizing → Managing
+09   09_benchmark_headline_results.txt                report         Managing
+
+
+Cross-references
+----------------
+A1 → DL-00       API landscape revealed the green-l system-prompt constraint
+A2 → DL-00, 01   Benchmark design research drove the fairness rules and
+                  framework choice
+A3 → DL-01       Framework analysis led directly to LangGraph decision
+A4 → DL-06       UI analysis led to Flask + vanilla HTML choice
+ADV1 → DL-01     Architecture advisory informed the 3-node graph design
+ADV2 → DL-05     SDK advisory drove the smart_route v0/v1 split
+ADV3 → DL-07     Artifacts advisory drove PDF format choice
+DL-00 → 0b, 01   Foundational fairness rules every subsequent DL depends on
+DL-0b → 01, 09   Dataset design drove pipeline architecture and makes headline
+                  numbers defensible (48-row spread not noise)
+DL-02 → 03, 04   Correct savings math made both findings visible
+DL-03,04 → 05    Findings fed directly into smart routing design
+DL-05 → 06       SDK needed a UI surface to demo on
+DL-07 ← 02       PDF report reads from results.csv
+DL-09 ← all      Headline results are the terminal artifact of every
+                  prior decision
+
+
+How to read these
+-----------------
+- A_ files are pre-build research notes (Analyzing stage): what was read,
+  compared, and learned before any design decision was made.
+- ADV_ files are pre-build advisory memos (Advising stage): concrete
+  recommendations derived from the analysis, written before implementation.
+- DL_ files are decision logs (Designing → Realizing → Managing): what
+  was built, why, and what it unlocks.
+- "FINDING" entries (DL-03, DL-04) document broken assumptions — moments
+  where the data falsified an expectation. These are the highest-value
+  entries in the log.
+- The footer of every entry names the source files (with @ refs) and
+  the LO stages covered.
+
+
+GENERATED OUTPUTS (authoritative artifacts)
+───────────────────────────────────────────
+outputs/results.csv           192-row benchmark data — the source of truth
+outputs/report.pdf            Technical writeup: charts + methodology + findings
+outputs/chart_savings.png     Token savings bar chart by method (standalone PNG)
+outputs/chart_quality.png     G-Eval quality bar chart by method (standalone PNG)
+outputs/benchmark_run.log     Full run transcript (192 rows, 0 crashes)
+BENCHMARK_ANALYSIS.md         Per-use-case pivot analysis with full number tables
+
+All outputs regenerate from results.csv:
+  python report.py     → report.pdf + chart PNGs   (2 s)

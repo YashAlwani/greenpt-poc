@@ -1,0 +1,170 @@
+﻿[DL] What is the lowest-friction way to demo GreenPT live to a client?
+GreenPT POC
+
+
+1. Context
+
+Project: GreenPT POC / day 2 (developer-facing demo surface).
+
+Why this matters right now:
+The CSV and the PDF are evidence; they are not a demo. Selling a JSON optimization API without a
+live playground is uncompetitive — OpenAI, Anthropic, Mistral, and Cohere all have one. The first
+version of the output layer was just the benchmark script printing results to the terminal. That's
+fine for development. It is not fine for a sales meeting where the client needs to see a number
+update in real time after pressing a button. The question is how lightweight the playground can
+be without looking unfinished, given half a day of build time remaining.
+
+Where this fits:
+Hosts the SDK from DL-05 visually. The playground is what "demo day" means for this project. It's
+also the UI that surfaces "method_used: postprocess (auto)" — making smart routing visible rather
+than a black box.
+
+
+2. Research question
+
+What's the lowest-friction way to demo GreenPT live to a client without standing up production
+infrastructure?
+
+
+3. Current LO stage
+
+[x] Analyzing  — compared 5 UI options (CLI / Streamlit / Gradio / React / Flask) in A4 before
+                  writing a single line of frontend code; ruled out Streamlit/Gradio on aesthetics
+                  and React on build-step overhead
+[x] Designing  — picked Flask + vanilla HTML/CSS/JS; rejected three fancier options
+[x] Realizing  — built app.py + static/{index.html, style.css, app.js}, all under 200 LoC each
+
+
+4. What makes a good decision here
+
+- Runs locally with one command (no Docker, no deployment, no cloud service to keep alive)
+- Customer can see token savings happen in real time — KPI cards must update on every request
+- Both wire format (TOON) and decoded output are inspectable in the same view
+- Frontend looks polished enough for a sales meeting, not like scaffolding
+
+
+5. What I decided
+
+Flask backend + vanilla HTML/CSS/JS at localhost:5000.
+
+  GET  /              serves the single-page UI from static/index.html
+  POST /api/optimize  accepts {prompt, schema, method}, returns the full RunResult including
+                       method_used (after smart routing)
+
+Single static page with three input fields and six KPI cards + four collapsible code panels.
+
+Rejected:
+  - CLI only           — uncompetitive; a terminal screenshot in a slide deck is not a product
+  - Hosted Vercel/Render — too much overhead for 2 days; needs CORS + public API key
+  - React/Next.js      — overkill for one form and one result block; introduces a build step
+                          that eats half a day
+
+
+6. Why this decision
+
+Method: Showroom (built specifically to be shown), Library (looked at how OpenAI / Anthropic /
+Mistral playgrounds structure their pages).
+
+The starting point was a wall of JSON printed to the terminal at the end of a benchmark run.
+That served development fine. For a demo, a wall of JSON with no visual hierarchy is
+indistinguishable from a debug tool — it tells the client nothing about what's useful.
+
+The transformation happened when the six KPI cards were added at the top of the result panel:
+tokens before, tokens after, savings %, method used, status, latency. Same backend, same logic,
+50 extra lines of CSS — and the page shifted from "engineering output" to "product UI." The KPI
+cards are what a client reads before they read anything else. Without them, the same page looks
+like a debug script; with them, it looks like a developer tool worth paying for.
+
+[IMAGE: playground_ui.png — Flask playground at localhost:5000 showing the six green KPI cards
+(tokens before: 60, tokens after: 31, savings: 48.3%, method_used: postprocess (auto), status: ok,
+latency: 1.2s) and four collapsible panels below for decoded JSON, TOON wire format, key map,
+and raw model output.]
+
+Final frontend breakdown:
+
+    static/index.html   122 LoC   form + result panel + KPI cards
+    static/style.css    234 LoC   GreenPT green theme, KPI cards, code panels
+    static/app.js        95 LoC   fetch(), render, error handling
+
+Backend is 60 LoC of Flask in @app.py. No build step, no node_modules, no deployment story, no
+CORS, no auth. One command: python app.py.
+
+The single-page layout matches the mental model of every developer who has used OpenAI's
+playground: input on the left, result on the right. The result panel shows the six KPI cards
+first, then four collapsible <details> panels (decoded JSON, TOON wire format, key map, raw model
+output). KPI cards give the headline in five seconds; the collapsible panels are for the curious
+developer who wants to see what's actually on the wire.
+
+The default form values matter: the page loads with a real invoice extraction prompt and a real
+5-key schema pre-populated in @static/index.html. The first thing a client sees is "press Run,
+get a number" — not "what do I type here?"
+
+The green theme (#1B5E20 header bar, mid-green KPI accents, pale-green hover states) in
+@static/style.css matches the GreenPT brand. The same METHOD_COLORS constants used in
+@report.py's charts — the visual language is consistent across the playground and the PDF.
+
+Smoke test:
+
+    Input:   5-key invoice schema, method=auto
+    Routed:  postprocess
+    Output:  60 -> 31 tokens (48.3% savings) in 1.2s
+    Render:  KPI cards updated; all four <details> panels populated
+
+What I'd recommend:
+For any API product POC where the deliverable is a sales-meeting demo, default to Flask + vanilla
+HTML/CSS/JS unless the UI itself is the product. The build-step tax of React eats half a day for
+a one-form, one-result page where the client never opens DevTools. Add the KPI cards early —
+they're what turns a debug tool into a product.
+
+GAP found:
+No "run all 4 methods at once" comparison view. The playground shows one method at a time.
+A /api/benchmark endpoint that runs all four and returns a side-by-side table would be useful
+for a customer comparing combined vs postprocess on their own schema. Scoped as a follow-up.
+
+
+7. Does this hold up
+
+- One command to start:           ✅ python app.py -> localhost:5000; confirmed
+                                       on a clean Python environment
+- Real-time savings visible:      ✅ KPI cards update on every fetch(); elapsed_s
+                                       is in the response and renders immediately
+- TOON + decoded side-by-side:    ✅ both visible via collapsible <details> panels
+                                       in the same view without page navigation
+- Polished enough for a meeting:  |  green-themed KPI cards, monospace code panels,
+                                       clean grid layout — assessed by the author.
+                                       A second opinion before a high-stakes demo
+                                       is recommended.
+
+Assumptions I'm making:
+Sales will demo on their own laptops with Python installed and a GREENPT_API_KEY in .env.
+Reasonable for a founder-led motion but not for a non-technical AE. If the sales motion scales,
+a hosted version becomes necessary.
+
+What surprised me:
+How much of the perceived polish came from the KPI cards alone. The first version with just the
+raw output block looked like a debug tool regardless of how clean the code was. Six green cards
+at the top and the same page looks like a product. Visual hierarchy matters more than
+completeness for a first impression.
+
+
+8. What this unlocks
+
+Next LO stage: Realizing -> Managing for the PDF report (DL-07), which takes the same numbers
+this playground surfaces and puts them in a send-to-client format.
+
+What I can now do:
+- Demo GreenPT live in any meeting without internet beyond the GreenPT API call itself
+- Hand someone the repo and have them see savings on their own prompt in under a minute
+- Extend with a /api/benchmark endpoint for side-by-side comparison (GAP above)
+
+Ongoing monitoring:
+If the KPI cards update with a non-error result on app startup, the SDK and the backend are both
+wired correctly. That's the fastest end-to-end smoke test in the project.
+
+How I'll know this worked:
+Someone else clones the repo, runs python app.py, opens localhost:5000, and gets a result without
+me in the room. That's the test that the "lowest-friction demo" claim actually holds.
+
+
+*@app.py · @static/index.html · @static/style.css · @static/app.js*
+*@LO1: Analyzing · @LO3: Designing · @LO4: Realizing*

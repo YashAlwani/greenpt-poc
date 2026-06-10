@@ -1,0 +1,106 @@
+ADVISING EVIDENCE — ADV1
+Pipeline Architecture Recommendation
+GreenPT POC
+
+From: @decision_logs/A1_greenpt_api_landscape_scan.txt · @decision_logs/A2_benchmark_design_research.txt · @decision_logs/A3_pipeline_framework_analysis.txt
+
+
+Research question
+-----------------
+Given the LangGraph framework decision from A3, exactly how should the benchmark pipeline be
+structured — which files, which nodes, what state contract — so the methodology is auditable
+and the client presentation story holds?
+
+
+Recommendation
+--------------
+Build the benchmark pipeline as a LangGraph StateGraph with three explicit nodes:
+simulate -> greentpt -> eval, with a conditional edge that loops back to simulate while rows
+remain.
+
+Do NOT use a plain for-loop. Do NOT use LangChain AgentExecutors.
+
+
+Why this, specifically
+----------------------
+Method: Library (A1-A3 analysis), Showroom (the graph IS the deliverable for the sales
+conversation).
+
+1. The graph IS the deliverable, not just the implementation
+
+   The entire value of the benchmark to a sales conversation is the methodology story: "three
+   explicit nodes, each with a defined role, every step auditable." A for-loop and a StateGraph
+   produce the same CSV. Only one of them produces a diagram you can put on a slide.
+
+2. The TypedDict state makes the methodology auditable
+
+   BenchmarkState in state.py gives every piece of in-flight data a name and a type. A reviewer
+   can read the TypedDict and understand exactly what information flows between nodes — compare
+   this to implicit state in a for-loop where a reader has to trace execution mentally.
+
+3. Conditional edge handles the per-row loop cleanly
+
+   The conditional edge from eval back to simulate IS the loop. run.py becomes a single
+   graph.invoke() call. The loop disappears from the application layer entirely.
+
+4. Node isolation enables independent model tiers
+
+   The judge model must not be the same endpoint as the one being benchmarked (self-favoritism
+   bias, confirmed in A2). Node isolation makes this natural: simulate has no model call,
+   greentpt uses the GreenPT endpoints, eval calls Mistral Small direct (@nodes/eval.py).
+
+5. Extensibility is a one-file change
+
+   Adding a 5th optimization method only requires adding to the METHODS dict in
+   @tools/greentpt_tools.py. graph.py is untouched.
+
+
+What to build, concretely
+-------------------------
+
+   state.py              BenchmarkState TypedDict: rows_remaining, current_row,
+                         method_results, results_so_far. Target: <25 LoC.
+
+   nodes/simulate.py     Pop next row from rows_remaining, set as current_row
+                         (use_case, size, prompt, schema). No model call.
+                         Target: <35 LoC.
+
+   nodes/greentpt.py     Call all 4 method tools against current_row. Append
+                         method_results. Target: <30 LoC.
+
+   nodes/eval.py         Schema check + G-Eval scoring + accumulates results.
+                         should_continue() returns "simulate" or END.
+                         Target: <70 LoC.
+
+   graph.py              Wire nodes, add edges, compile. Target: ~22 LoC.
+
+   run.py                Load CSV -> build initial state -> graph.invoke()
+                         -> write results.csv. Target: ~40 LoC.
+
+
+What to watch for during implementation
+---------------------------------------
+- Make sure the judge in eval.py calls a direct model endpoint, not GreenPT (see A2 —
+  self-judging bias). A single wrong import here invalidates the quality numbers.
+- The key_map for the combined method must go in the user message, not the system prompt
+  (see A1 — green-l drops external system prompts silently). If this is missed, every
+  combined row produces uncompressed output with no error.
+- Print [SIM] / [GPT] / [EVAL] prefixed lines per row to stdout. A 15-minute run with no
+  terminal output looks like a hang.
+
+
+Risks
+-----
+- LangGraph's API (as of mid-2024) is still evolving. A minor version upgrade may require
+  updating the graph definition. Pin the version in requirements.txt.
+- No mid-run checkpointing. If the API times out on row 40 of 48, results in memory are lost.
+  Acceptable for a 15-minute run; not acceptable at scale. Flag as a known gap.
+
+
+Status: Implemented — see DL-01. All files above exist in the repository. LoC targets met:
+simulate 33 LoC (target <35), greentpt 24 LoC (target <30), eval 67 LoC (target <70),
+graph 22 LoC. The gotchas above were caught before implementation, not discovered after.
+
+
+*@graph.py · @state.py · @nodes/simulate.py · @nodes/greentpt.py · @nodes/eval.py · @tools/greentpt_tools.py*
+*@LO2: Advising*

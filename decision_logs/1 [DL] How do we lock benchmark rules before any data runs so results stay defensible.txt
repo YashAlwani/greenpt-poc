@@ -1,0 +1,172 @@
+﻿[DL] How do we lock benchmark rules before any data runs so results stay defensible?
+GreenPT POC
+
+
+1. Context
+
+Project: GreenPT benchmarking POC / day 1 (foundational rules before the pipeline is even wired up).
+
+Why this matters right now:
+GreenPT sells one thing: that its JSON optimization layer cuts tokens without cutting quality.
+The whole POC exists to prove that. But before any row was scored, I kept stopping on the same
+problem: are these four methods actually being compared apples-to-apples? What if green-l uses
+a different model than green-l-raw? What if temperature variance makes runs non-reproducible?
+What if failures silently vanish from the denominator? A1 and A2 answered all of those questions
+one by one. Eight rules fell out. The rules in this DL are not written in a README — they're
+source-code constants. A line in a README that says "temperature=0" is a guideline. A line in
+the tools module that reads TEMPERATURE = 0 is a contract (@tools/greentpt_tools.py).
+
+Where this fits:
+Foundational. Every subsequent DL (01 through 09) assumes these rules hold. Any finding that
+comes out of the benchmark is only as defensible as this ruleset.
+
+
+2. Research question
+
+What rules should the GreenPT agent and benchmark pipeline follow so that the four optimization
+methods can be compared apples-to-apples, the savings number means what it says, and failures
+don't silently corrupt the dataset?
+
+
+3. Current LO stage
+
+[x] Analyzing  — mapped failure modes: unfair compute, silent crashes, dishonest savings math,
+                  no quality regression visibility
+                  (A1 confirmed the green-l vs green-l-raw distinction; A2 surfaced T=0, typed
+                  failures, and G-Eval as the right quality method)
+[x] Advising   — derived 8 fairness rules from A1 and A2 before any pipeline code was written
+[x] Designing  — wrote the ruleset into the tools layer as module-level constants
+[x] Realizing  — constants live in @tools/greentpt_tools.py, @toon.py, and @nodes/eval.py
+
+
+4. What makes a good decision here
+
+- A/B isolates the optimization layer only — same model, same temperature, same max_tokens,
+  same user prompt across all 4 methods
+- Failure modes are logged with a typed status, never raised as crashes — one bad row cannot
+  kill a 15-minute run
+- Token-savings % matches what a real proxy would charge — key_map sent once per session,
+  not amortized per call
+- Quality regressions are visible per row, not averaged into oblivion
+- A developer can call the SDK without picking a method
+
+
+5. What I decided
+
+Lock 8 rules for the GreenPT agent:
+
+  1. All 4 methods run on every row (baseline, postprocess, prompt_engineering, combined) — no
+     skipping.
+  2. Same underlying compute (Mistral Small 3.2 24B) for all methods — green-l-raw for
+     baseline/postprocess, green-l for prompt_eng/combined.
+  3. Fairness constants in source: TEMPERATURE = 0, MAX_TOKENS = 1024.
+  4. TOON abbreviates keys only when length >= 4 characters.
+  5. The combined method uses a deterministic key_map pinned into the user message so the
+     model doesn't invent its own abbreviations.
+  6. Per-session key_map accounting — the map is treated as session metadata, not billed per call.
+  7. Quality floor advisory at G-Eval < 3 — flags the row but does not stop the run.
+  8. Three-class failure taxonomy: parse_failed, decode_failed, api_failed — always logged into
+     the status column, never raised.
+
+
+6. Why this decision
+
+Method: Library (read GreenPT model catalog), Lab (TOON round-trip test).
+
+The four methods cover the meaningful design space. Baseline is no optimization. Postprocess is
+client-side compression only — after a vanilla LLM call. Prompt_engineering is server-side prompt
+tuning only (GreenPT's green-l). Combined stacks both. Skipping any method on a given row leaves
+a gap in the comparison matrix — any per-use-case finding would lose its denominator.
+
+Same underlying compute is the single most important rule. A1 confirmed: green-l-raw and green-l
+both wrap Mistral Small 3.2 24B — the only difference is GreenPT's tuned system prompt. Routing
+baseline and postprocess through green-l-raw, and prompt_engineering and combined through green-l,
+isolates the optimization layer as the single varying variable (@A1_greenpt_api_landscape_scan.txt).
+Without this, any savings difference could be a cheaper model talking less.
+
+Fairness constants in source (@tools/greentpt_tools.py):
+
+    TEMPERATURE = 0
+    MAX_TOKENS  = 1024
+
+Rules in a README drift. Constants in source don't. They are read by every method call — there
+is no execution path that bypasses them.
+
+TOON abbreviates only keys >=4 chars (@toon.py). Compressing a 3-character key saves 1 token at
+most and costs interpretability. For the combined method, the key_map is pre-computed from the
+schema and injected into the user message prefix — green-l rejects system prompts entirely (A1
+finding), so TOON instructions ride in the user message instead. This kills abbreviation drift
+across rows.
+
+Per-session key_map accounting reflects how a real proxy would operate. token_savings_pct is
+computed on the compressed JSON only — the same number a real customer sees on their bill. An
+amortized key_map would inflate the savings percentage in a way a client could discover and use
+to discount everything else.
+
+Quality floor advisory: any row scoring G-Eval < 3 sets quality_warning=True in results.csv
+(@nodes/eval.py:8). The benchmark doesn't stop. 6 of 192 rows ended up flagged in the full run.
+
+Failure taxonomy: parse_failed (LLM returned non-JSON), decode_failed (TOON decode broke),
+api_failed (HTTP/timeout). Every failure logged into the status column. 16 of 192 rows hit
+parse_failed — visible in the data, zero crashes during the run (@outputs/results.csv).
+
+What I'd recommend:
+For any benchmarking pipeline you intend to defend to a client, push the fairness rules into
+source-code constants, never into prose. The savings number is the entire product claim. If the
+number is computed under different rules on a client's laptop than it was on yours, the claim
+collapses. TEMPERATURE = 0 and MAX_TOKENS = 1024 as module-level constants are the minimum
+reproducibility guarantee.
+
+GAP found:
+The quality floor of G-Eval < 3 is intuition, not data. After the full run only 6 out of 192
+rows tripped it — either the model is more consistent than expected, or the floor is too lenient
+and < 3.5 would surface more honest regressions. Worth revisiting before any production rollout.
+
+
+7. Does this hold up
+
+- A/B isolates optimization layer only:  ✅ same compute confirmed in A1; only
+                                             system-prompt source varies between
+                                             green-l and green-l-raw
+- Failures logged not crashed:           ✅ 16 parse_failed rows, 0 pipeline
+                                             crashes across the full 192-row run
+                                             (@outputs/results.csv)
+- Per-session key_map accounting:        ✅ self_savings_pct (debug col) vs
+                                             token_savings_pct (headline) both
+                                             present in results.csv; verifiable
+                                             per row
+- Quality regressions visible per row:   ✅ quality_warning=True on 6/192 rows;
+                                             in data, not dropped
+- Zero-config SDK:                       ✅ GreenPTClient() defaults to
+                                             method="auto" per ADV2
+
+Assumptions I'm making:
+green-l and green-l-raw wrap the same underlying weights (per GreenPT model catalog — not
+independently verified). tiktoken cl100k_base is a reasonable token proxy for Mistral Small
+3.2's actual tokenizer; probably off by a few percent at most.
+
+What surprised me:
+The quality floor caught very few rows (6/192). Either the model is more consistent on
+structured-extraction tasks than expected, or the threshold was too lenient. The data we already
+have in outputs/results.csv would let us pick a smarter floor — that's the most obvious follow-up.
+
+
+8. What this unlocks
+
+Next LO stage: Designing — pipeline architecture (DL-01).
+
+What I can now do:
+Run the benchmark and get one comparable row per (use_case, size, method) without ambiguity.
+Every row has a method, status, savings %, score, and optional quality flag.
+
+Ongoing monitoring:
+Open outputs/results.csv. Sort by status != 'ok' to see failures. Sort by quality_warning=True
+to see regressions. Non-technical stakeholder can read this directly without touching code.
+
+How I'll know this worked:
+A full run produces 192 rows with status distribution close to {ok: 176, parse_failed: 16},
+zero crashes, headline savings number per method reproducible across runs (since T=0).
+
+
+*@tools/greentpt_tools.py · @toon.py · @tools/eval_tools.py · @nodes/eval.py · @sdk.py*
+*@LO1: Analyzing · @LO2: Advising · @LO3: Designing · @LO4: Realizing*

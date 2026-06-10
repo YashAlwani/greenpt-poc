@@ -1,0 +1,174 @@
+﻿[DL] Should I use LangGraph or a simple loop for the benchmark pipeline?
+GreenPT POC
+
+
+1. Context
+
+Project: GreenPT benchmarking POC / day 1 (pipeline runtime architecture, immediately after
+the ruleset is locked in DL-00).
+
+Why this matters right now:
+The ruleset needs a runtime to enforce it. A3 had already settled the framework question —
+LangGraph was the answer. But framework choice is not the same as architecture decision. The
+real question was: how do you decompose the work? What are the three boxes in the diagram? What
+state flows between them? I kept sketching node designs and then running into the same problem:
+how does eval know what baseline did? How does greentpt know which row it's on? The TypedDict
+answer wasn't obvious until I stopped thinking about the code and started thinking about what
+each step actually needs to know and produce. Once that mental model clicked, graph.py wrote
+itself in 20 minutes.
+
+Where this fits:
+Implements the pipeline that DL-02 (savings math) through DL-09 (headline results) all depend
+on. Every benchmark finding in this project came out of this graph.
+
+
+2. Research question
+
+How should the benchmark pipeline be structured — single ReAct agent with all 4 method tools,
+chained AgentExecutors, or an explicit multi-node state graph?
+
+
+3. Current LO stage
+
+[x] Analyzing  — compared single-agent vs chained executors vs state graph (A3: full 4-option
+                  comparison done before any pipeline code was written)
+[x] Advising   — wrote ADV1: concrete build recommendation naming files to create, risks to
+                  watch, and why LangGraph over AgentExecutors — before graph.py existed
+[x] Designing  — picked LangGraph with 3 nodes and a conditional edge
+[x] Realizing  — graph.py, state.py, and nodes/*.py built; first full run completed in 6-7 min
+
+
+4. What makes a good decision here
+
+- Clear separation between data loading, optimization, and judging — each step small enough
+  that a non-technical reader can follow it
+- State transitions are inspectable per row — no hidden agent reasoning
+- Each node can use a different model tier (judge model and method models are independent)
+- Adding a 5th method or new evaluator is a one-file change, not a graph rewrite
+
+
+5. What I decided
+
+LangGraph StateGraph with 3 explicit nodes:
+
+  simulate_node  -> pops the next row from rows_remaining, sets it as current_row
+                    (use_case, size, prompt, schema)
+  greentpt_node  -> runs all 4 method tools against the current row, captures method_results
+  eval_node      -> schema check + G-Eval scoring + accumulates results, then routes via
+                    conditional edge
+
+A conditional edge from eval_node loops back to simulate_node while rows_remaining is non-empty,
+otherwise terminates at END.
+
+
+6. Why this decision
+
+Method: Library (reviewed LangGraph vs AgentExecutor docs), Showroom (built the 3-node graph
+specifically to make the methodology visible as a diagram).
+
+The real design question wasn't LangGraph vs alternatives — A3 had already settled that. It was
+figuring out the right decomposition: what belongs in which node, and where state lives. The
+project structure took the most time to think through: eval + simulate + greentpt as three
+discrete units, each with a single responsibility, all coordinated through one TypedDict
+(@state.py). That mental model wasn't obvious upfront — it emerged from asking what each step
+actually needs to know and produce. simulate only needs the unprocessed row list. greentpt only
+needs the current row and the API keys. eval only needs the method results and the current row's
+schema for scoring. None of them need each other's internal state.
+
+A single create_react_agent with all 4 method tools would have worked — but the demo story is
+weak. "An agent reasons about which tool to call." For a sales conversation, a diagram with three
+named boxes and arrows between them is the entire methodology pitch. The graph IS the slide. That
+constraint alone eliminated the single-agent option.
+
+[IMAGE: graph_visualization.png — LangGraph 3-node diagram: simulate -> greentpt -> eval with
+conditional back-edge to simulate. This is the methodology diagram that goes in the client deck.]
+
+Once the structure was clear, the LangGraph wiring was 22 lines (@graph.py):
+
+    g = StateGraph(BenchmarkState)
+    g.add_node("simulate", simulate_node)
+    g.add_node("greentpt", greentpt_node)
+    g.add_node("eval",     eval_node)
+
+    g.set_entry_point("simulate")
+    g.add_edge("simulate", "greentpt")
+    g.add_edge("greentpt", "eval")
+    g.add_conditional_edges("eval", should_continue,
+                            {"simulate": "simulate", END: END})
+
+    return g.compile()
+
+The conditional edge expresses the per-row loop cleanly. should_continue lives in
+@nodes/eval.py:63 and is five lines — if rows_remaining is non-empty, go back to simulate;
+otherwise END. The for-loop disappears from run.py entirely.
+
+All state flows through BenchmarkState in @state.py — a single TypedDict that every node reads
+from and writes to. Each node is small: @nodes/simulate.py (33 LoC), @nodes/greentpt.py
+(24 LoC), @nodes/eval.py (67 LoC including should_continue). ADV1 specified target LoC for each
+file before any were written — all three came in at or under target.
+
+Different model tiers per node fall out naturally. simulate_node only reads from CSV (no model
+call). eval_node calls the judge model direct (@nodes/eval.py) — not through GreenPT, per A2's
+self-favoritism guard. greentpt_node calls GreenPT endpoints. Judge costs are isolated from the
+optimization layer being evaluated.
+
+The first full run completed in 6-7 minutes across 192 rows — 384 API calls total (generation +
+G-Eval judge), zero crashes. Extensibility confirmed: the METHODS dict in
+@tools/greentpt_tools.py is the single extension point. Adding a 5th method doesn't touch
+graph.py.
+
+What I'd recommend:
+For any benchmarking pipeline that needs to be defensible to a client, prefer the explicit graph
+over a single ReAct agent — even when the agent is simpler to write. The extra upfront thinking
+about node decomposition buys you a methodology diagram you can put on a slide. That's the
+deliverable, not just the CSV.
+
+GAP found:
+No mid-run checkpointing. If the API fails on row 47 of 48, the previous 46 rows of work are
+still in memory but not persisted to disk until the graph terminates. Not a blocker for the POC
+(full run is under 10 minutes) but a known limit for any production rollout — add LangGraph's
+checkpointer before this scales.
+
+
+7. Does this hold up
+
+- Clear separation, small nodes:     ✅ simulate.py (33 LoC), greentpt.py (24 LoC),
+                                         eval.py (67 LoC) — all at or under ADV1 targets
+- Inspectable state:                 ✅ BenchmarkState TypedDict in @state.py makes
+                                         every transition typed and readable
+- Different model tiers per node:    ✅ judge runs direct, GreenPT methods on
+                                         green-l / green-l-raw per DL-00 rules
+- Extensible:                        ✅ METHODS dict in @tools/greentpt_tools.py is
+                                         the single extension point
+
+Assumptions I'm making:
+LangGraph's per-step overhead won't materially bloat the wall time. Confirmed: 384 API calls
+dominate; graph overhead is negligible across 192 rows.
+
+What surprised me:
+How much of the build time went into figuring out the structure — not the LangGraph syntax, which
+is minimal, but the decomposition itself: what eval needs, what simulate produces, what flows
+through state. Once the three-node mental model clicked, graph.py wrote itself in 20 minutes.
+The hard part was before any code was open.
+
+
+8. What this unlocks
+
+Next LO stage: Designing — methodology for cross-method savings (DL-02).
+
+What I can now do:
+Run python run.py (with --limit 1 for smoke tests or no flag for the full dataset) — same
+graph, no code change. Visualize the graph for a non-technical stakeholder as a three-box
+diagram via get_graph().draw_mermaid().
+
+Ongoing monitoring:
+Each node prints a [SIM], [GPT], [EVAL] line per row to stdout. Live tail of
+outputs/benchmark_run.log shows where you are in the run at any point.
+
+How I'll know this worked:
+A full run completes in one shot. outputs/results.csv has 192 rows, each with all 14 columns
+populated. Status distribution matches expectation ({ok: 176, parse_failed: 16}).
+
+
+*@graph.py · @state.py · @nodes/simulate.py · @nodes/greentpt.py · @nodes/eval.py*
+*@LO1: Analyzing · @LO2: Advising · @LO3: Designing · @LO4: Realizing*

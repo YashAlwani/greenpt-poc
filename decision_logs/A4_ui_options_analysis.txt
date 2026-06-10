@@ -1,0 +1,102 @@
+ANALYZING EVIDENCE — A4
+UI Options Analysis: Playground for GreenPT SDK
+GreenPT POC / Pre-build research
+
+
+Research question
+-----------------
+What's the lowest-friction way to demo GreenPT live to a client — locally, in a single command,
+polished enough for a sales meeting — in half a day?
+
+
+Options evaluated
+-----------------
+Reference bar: OpenAI Playground, Anthropic Console, Mistral Le Chat, Cohere Dashboard. All
+share the same mental model: input on the left, output + metrics on the right. No login required
+for the demo. One form, one result. That's the target — not a dashboard, not a data-science tool.
+
+Option A: CLI output only (no UI)
+
+   Pros: already works; zero additional code.
+   Cons: a terminal screenshot in a slide deck does not look like a product; no interactive
+         input; every modern API competitor has a playground — arriving without one signals the
+         product is not ready.
+
+   Verdict: rejected immediately.
+
+
+Option B: Streamlit
+
+   Pros: Python-native, one file, auto-refresh, widgets are one line each, hot reload.
+   Cons: default look is generic data-science tool, not a product; custom CSS requires injecting
+         markdown HTML strings — awkward and fragile; can't match GreenPT green brand without
+         significant CSS override work.
+
+   Verdict: good for internal tools, wrong aesthetic for a B2B sales meeting.
+
+
+Option C: Gradio
+
+   Pros: excellent for model comparison UIs; has built-in compare widget; HuggingFace integration.
+   Cons: visual style is "HuggingFace ML demo," not a product; even more opinionated styling than
+         Streamlit; compare widget is overkill for a one-form, one-result page.
+
+   Verdict: rejected. Wrong aesthetic for a B2B sales motion.
+
+
+Option D: React / Next.js
+
+   Pros: professional out of the box with component libraries (Shadcn, Tailwind); component reuse
+         if the playground grows; familiar to any frontend engineer.
+   Cons: requires npm, build step, dev server — not a single python command; 10x the LoC for a
+         one-form, one-result page; minimum half a day to wire a React frontend to a Flask backend.
+
+   Verdict: right for a production product, wrong for a 2-day POC.
+
+
+Option E: Flask + vanilla HTML/CSS/JS
+
+   Pros: one command to run (python app.py); full CSS control — GreenPT green theme is just a
+         CSS variable; no build step, no node_modules, no npm; backend is ~60 LoC of Flask.
+   Cons: more CSS to write than Streamlit/Gradio; vanilla JS fetch() for the API call — less
+         ergonomic than React hooks; manual DOM updates on result.
+
+   Verdict: selected. The CSS cost is worth the visual control for a sales-meeting demo.
+
+
+Why Flask won
+-------------
+Method: Library (reviewed OpenAI Playground, Anthropic Console, Mistral Le Chat layout and
+interaction model), Showroom (built specifically to be shown).
+
+The deciding constraint was visual control over the KPI card layout. Streamlit and Gradio would
+have been faster to write. Both would have produced a page that looks like a data-science tool,
+regardless of how much CSS override work went in. For a B2B sales motion where the product is a
+JSON optimization API, the demo needs to look like a developer tool, not a research notebook.
+
+The reference point that made this concrete was the Anthropic Console's KPI card layout: tokens
+used, latency, cost — three numbers in a row at the top of the result panel. Flask + vanilla HTML
+is the only option on this list where that layout can be built in half a day without fighting the
+framework.
+
+The single-command run is non-negotiable for a demo that sales will run on their own laptops.
+python app.py is the entire launch sequence. No node_modules, no npm run dev, no Docker, no
+environment setup beyond Python and an API key.
+
+What I'd recommend:
+For any API product POC where the deliverable is a sales-meeting demo, default to Flask + vanilla
+HTML/CSS/JS unless the UI itself is the product. The build-step tax of React eats half a day for
+a one-form, one-result page where the client never opens DevTools. Add the KPI cards early —
+they're what turns a debug tool into a product UI. See DL-06 for the implementation.
+
+
+Sources
+-------
+- OpenAI Playground (reviewed layout and interaction model)
+- Anthropic Console (reviewed KPI card layout approach)
+- Streamlit vs Flask comparison (Streamlit blog, 2023)
+- Gradio documentation (blocks API)
+
+
+*@app.py · @static/index.html · @static/style.css · @static/app.js*
+*@LO1: Analyzing*

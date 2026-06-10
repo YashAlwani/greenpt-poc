@@ -1,0 +1,186 @@
+﻿[DL] Does the combined method deliver positive savings across all use cases?
+GreenPT POC
+
+
+1. Context
+
+Project: GreenPT benchmarking POC / day 2 (interpreting full-run results, second key finding).
+
+Why this matters right now:
+The simplest pitch for GreenPT was "combined dominates everywhere — it stacks both optimization
+layers, so it has to win." The full run breaks that pitch. combined is the quality champion (mean
+G-Eval 4.29 vs 3.14 for baseline) but its savings number is wildly variable per use case —
+strongly positive on nested schemas, deeply negative on single-field intent-classification outputs.
+This forces an honest reframe and a concrete routing rule. A client pitched "combined is always
+best" and then running it on their chatbot intent classifier would lose 36% of tokens while paying
+top quality scores. That's not a great first impression.
+
+Where this fits:
+Together with DL-03 (prompt_engineering verbose), provides the data that DL-05 (smart routing v1)
+needs. Also shapes the report framing in DL-07 — "combined is the quality champion; smart routing
+picks the right method per schema" is the honest version of the pitch.
+
++---------------------------------------------------------------------+
+|  FINDING — ASSUMPTION FALSIFIED                                     |
+|  Prior assumption: combined (green-l + TOON) delivers positive      |
+|  savings across all use cases — "always use combined" is defensible.|
+|  What the data showed: combined wins +32.1% on invoice_parsing but  |
+|  loses -36.0% on intent_classification due to a fixed ~80-token     |
+|  instruction overhead that exceeds the savings on short outputs.    |
+|  See: outputs/results.csv -> token_savings_pct, filter method=      |
+|  combined                                                            |
++---------------------------------------------------------------------+
+
+
+2. Research question
+
+Does the combined method (green-l + client-side TOON with a deterministic key_map) deliver
+positive savings across all use cases — i.e., is "always use combined" a defensible blanket
+recommendation?
+
+
+3. Current LO stage
+
+[x] Realizing  — ran the full 192-row benchmark
+[x] Managing   — read the per-use-case pivots, found the variance, traced it to a structural
+                  cost in the combined method's construction
+
+
+4. What makes this a valid falsification
+
+- The variance shows up at the use_case level, not just per-row noise — 12 rows per cell
+- Quality is preserved or improved across the variance — quality champion status holds even on
+  negative-savings rows
+- The cause is mechanical: traceable to a specific cost structure in the method, not a model whim
+
+
+5. What I decided
+
+Treat this as a confirmed finding. combined is the quality champion but not a universal savings
+winner. Use it as the default for nested / multi-field schemas (invoice, resume). Fall back to
+postprocess for tiny-output workloads (intent classification, short summarization). Codify this
+in smart_route v1 (DL-05).
+
+
+6. Why this decision
+
+Method: Lab (full 48-row x 4-method run, then per-use-case pivot in outputs/results.csv).
+
+The full results split combined into two regimes:
+
+  use_case               combined savings vs baseline    G-Eval
+  ---------------------- ----------------------------    ------
+  invoice_parsing            +32.1%                       3.83
+  resume_parsing             +13.8%                       4.33
+  summarization              -2.3%                        4.50
+  intent_classification     -36.0%                        4.58
+
+Mean combined savings is only +2.0% across the dataset — dragged down by intent_classification
+and summarization.
+
+[IMAGE: outputs/chart_savings.png — Bar chart showing per-method mean savings. combined's bar
+is close to zero despite winning big on invoice_parsing; the per-use-case table is where the
+story lives.]
+
+[IMAGE: outputs/chart_quality.png — Bar chart showing per-method mean G-Eval. combined is the
+clear quality leader at 4.29, a full point above the other methods at ~3.14-3.19.]
+
+The mechanism is mechanical. The combined method prepends a TOON-instruction block to the user
+message because green-l rejects system prompts (A1 finding). That block lives in
+@tools/greentpt_tools.py:45-56 as _toon_user_prefix — approximately 80 tokens of instruction
+overhead injected into every combined call:
+
+    "OUTPUT INSTRUCTIONS — apply to your JSON answer below:\n"
+    f"1. Rename keys using this exact map: {km_json}\n"
+    "2. Output minified JSON — no whitespace, no newlines.\n"
+    "3. Never include the map in your output. No markdown. No code fences.\n\n"
+    "TASK:\n"
+
+For an invoice with 5 nested line-item arrays, that ~80-token overhead is amortized across ~150
+tokens of compressed output — net positive savings.
+
+For an intent_classification output like {"intent": "password_reset"}, the same instruction
+overhead lands on top of a ~30-token baseline output. The overhead is bigger than the entire
+baseline output. combined loses on savings even while gaining on quality (the explicit minify
+instruction is what pushes the score to 4.58).
+
+Said simply: combined trades a fixed ~80-token instruction overhead for percentage-based savings
+on the output. The trade only pays when the output is big enough that the percentage savings
+exceed the fixed overhead. Below that threshold, instructions cost more than they save.
+
+What I'd recommend:
+Three things.
+
+  1. Codify the threshold in smart_route v1: if the schema has very few keys or very short keys,
+     skip combined and use postprocess. Rough threshold from the data: fewer than ~5 keys x
+     6-char avg key length (@sdk.py).
+  2. Product follow-up: move the TOON-instruction block into the GreenPT system prompt
+     server-side. The overhead disappears from the on-the-wire user message and combined would
+     be net-positive everywhere. This is a GreenPT-side change, not a client one.
+  3. Report framing: for clients with invoice / resume / long-form workloads, lead with combined.
+     For chatbot / intent-classifier customers, lead with postprocess and disclose the overhead
+     floor up front.
+
+GAP found:
+We don't yet know whether the overhead scales the same way on the reasoning tier (green-r). The
+benchmark only covered green-l. A short follow-up run on green-r — same 48 rows, same methodology,
+~10 minutes — would tell us whether the routing thresholds need to differ by model tier.
+
+
+7. Does this hold up
+
+- Variance shows up at use_case level:  ✅ +32.1% to -36.0% spread is consistent
+                                            across 12 rows per use_case cell; not
+                                            noise (@outputs/results.csv,
+                                            @BENCHMARK_ANALYSIS.md)
+- Quality champion status preserved:    ✅ combined highest-scoring on 4/4 use
+                                            cases (3.83, 4.33, 4.50, 4.58)
+- Cause is mechanical:                  |  _toon_user_prefix overhead traceable in
+                                            @tools/greentpt_tools.py:45-56 — but
+                                            the green-l verbosity effect from DL-03
+                                            is probably also stacked on top. Two
+                                            effects not ablated separately. Dominant
+                                            mechanism is the ~80-token prefix; exact
+                                            split unverified.
+
+❌ Original assumption ("combined dominates everywhere") — falsified; holds only for nested /
+   multi-field schemas.
+
+Assumptions I'm making:
+The TOON-instruction block is the dominant overhead source. It's possible green-l's own response
+style also adds tokens on short outputs (DL-03 confirms green-l is more verbose than green-l-raw).
+The two effects are probably stacked on intent_classification — disentangling them would need a
+separate ablation run.
+
+What surprised me:
+The quality story going the opposite direction from the savings story. combined scored 4.58 on
+intent_classification — the highest quality score of any method x use_case combination in the
+entire run — while losing 36% on savings for that same combination. That tension is exactly the
+kind of honest trade-off a report should name out loud, not paper over.
+
+
+8. What this unlocks
+
+Next LO stage: Designing — smart routing v1 (DL-05) now has concrete thresholds, not intuition-
+based heuristics.
+
+What I can now do:
+- Build smart_route v1 that branches on schema shape with actual data behind each branch
+- Frame the report honestly: "combined is the quality champion; smart routing picks the right
+  method per schema; here's what each one wins on"
+- Hand GreenPT a product memo: move the TOON-instruction into the server-side system prompt and
+  combined becomes net-positive everywhere
+
+Ongoing monitoring:
+Watch the per-use-case combined savings column in outputs/results.csv across future runs. If
+invoice_parsing combined savings drop below +20%, something has changed in green-l's behavior —
+recheck _toon_user_prefix and the green-l system prompt.
+
+How I'll know this worked:
+Smart routing v1 picks postprocess (not combined) for any schema whose total key length is below
+the threshold — and the playground UI shows "method_used: postprocess (auto)" for intent-
+classification-shaped inputs.
+
+
+*@outputs/results.csv · @sdk.py · @tools/greentpt_tools.py · @outputs/chart_savings.png · @outputs/chart_quality.png · @BENCHMARK_ANALYSIS.md*
+*@LO4: Realizing · @LO5: Managing*

@@ -1,0 +1,113 @@
+ANALYZING EVIDENCE — A2
+Benchmark Design Research
+GreenPT POC / Pre-build research
+
+
+Research question
+-----------------
+What does a rigorous, client-presentable LLM benchmark look like — and what are the specific
+failure modes that let a vendor inflate their savings number?
+
+
+What I found
+------------
+
+1. The single-variable principle
+
+   In every benchmark reviewed (MLCommons, HELM, Hugging Face Open LLM Leaderboard), the only
+   defensible comparison is one where exactly one variable changes. For GreenPT, that variable is
+   the optimization layer (none / client-side / server-side / both). Everything else — model,
+   temperature, max_tokens, prompt, schema — must be pinned.
+
+   The specific failure mode to avoid: running baseline on a cheaper model than the optimized
+   method, so the "savings" partly reflects a cheaper model being less verbose. Fix: same
+   underlying compute for all four methods, confirmed before any rows run (see A1).
+
+2. Temperature = 0 is not optional for reproducibility
+
+   Temperature > 0 means two runs on the same input will produce different token counts. A
+   savings percentage computed from a single run at T=0.7 is noise dressed as evidence. At T=0,
+   the same input always produces the same output — the number becomes a deterministic property
+   of the method, not a lucky sample.
+
+   Both BIG-bench and HELM pin temperature to 0 for all tasks where quality is measured via
+   structured output correctness. The judge model runs at T=0 for the same reason.
+
+3. Failure modes must be typed and counted, never silently dropped
+
+   Three open-source benchmark repos reviewed on GitHub: two of them wrapped the LLM call in
+   try/except and continued on error — meaning failed rows were absent from results. The savings
+   number was computed over the survivors. This inflates savings: if the optimization method
+   fails on hard inputs, those hard inputs disappear from the denominator.
+
+   The right approach: give every row a status column. Failures land as parse_failed /
+   decode_failed / api_failed. The headline number is computed over all rows, failures included
+   (savings=0 for failed rows).
+
+4. G-Eval is the right quality metric for this task type
+
+   Options reviewed:
+   - ROUGE / BLEU: word-overlap metrics, blind to semantic correctness of JSON values. A vendor
+     number extraction that returns "100" instead of "100.00" scores 0 on BLEU despite being
+     equivalent. Rejected.
+   - Human eval: gold standard but takes days, isn't reproducible, can't be automated. Not viable
+     for a 2-day POC.
+   - G-Eval (LLM-as-judge, Liu et al. 2023): scores on a 1-5 scale using an LLM to compare
+     output vs reference. Captures semantic correctness without exact string match. Reproducible
+     at T=0. Accepted.
+
+   Critical design rule from G-Eval: the judge model must NOT be the same model that produced
+   the output. Judging your own outputs with your own model introduces self-favoritism bias.
+   The judge calls Mistral Small direct, not through GreenPT (@nodes/eval.py).
+
+5. Use-case coverage matters more than row count
+
+   Four use cases x three sizes x four methods is enough to show a pattern, provided the use
+   cases span meaningful variation. Use cases selected to cover:
+   - Invoice extraction (long, high key count, financial numerics) — savings stress test
+   - Resume parsing (long, deep nesting, entity-heavy) — nested-schema test
+   - Summarization (medium, mixed depth) — quality-vs-savings trade-off
+   - Intent classification (short, flat, 2-3 fields) — no-op control
+
+   Note: the no-op control turned out to be the most informative cell in the run. See DL-04.
+
+
+Why this mattered
+-----------------
+Method: Library (HELM, G-Eval paper, BIG-bench, MLCommons methodology docs; three open-source
+benchmark repos reviewed on GitHub).
+
+The three repos with silently-dropped failures were the most useful input — not because of what
+they did right, but because of what they got wrong. The failure happened because try/except is the
+default Python error handling pattern and nobody explicitly asked "what happens to the rows that
+fail?" An optimization method that produces more LLM errors on hard inputs was invisible in those
+benchmarks.
+
+The G-Eval choice required validating the self-favoritism guard. Mistral Small direct (not routed
+through GreenPT) is the judge in @nodes/eval.py. If the judge had been green-l, it would be
+scoring GreenPT's own output against GreenPT's own quality expectations.
+
+The T=0 decision is obvious in retrospect. It wasn't obvious on day one. The reproducibility
+argument only landed when reviewing how HELM and BIG-bench handled it — without T=0, a savings
+percentage from a single run is unfalsifiable. TEMPERATURE = 0 and MAX_TOKENS = 1024 are now
+module-level constants in @tools/greentpt_tools.py, not choices a developer makes per call.
+
+What I'd recommend:
+For any benchmark that will be used to support a commercial claim, read at least one published
+evaluation methodology paper (HELM is the most useful) before writing the first node. The design
+decisions that look obvious after the run — T=0, typed failures, cross-method denominator — are
+not obvious before it. Two hours reading how other people got it wrong is cheaper than discovering
+the same mistakes in your own results CSV on day two.
+
+
+Sources
+-------
+- HELM (Holistic Evaluation of Language Models), Liang et al., 2022
+- G-Eval: NLG Evaluation Using GPT-4 with Better Human Alignment, Liu et al., 2023
+- MLCommons inference benchmark methodology (public)
+- BIG-bench: Beyond the Imitation Game benchmark paper, 2022
+- Three open-source benchmark repos reviewed on GitHub (not named to avoid vendor association)
+
+
+*@tools/greentpt_tools.py · @nodes/eval.py · @outputs/results.csv*
+*@LO1: Analyzing*

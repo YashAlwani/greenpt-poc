@@ -1,0 +1,179 @@
+﻿[DL] How do I package benchmark results into an artifact that never goes stale?
+GreenPT POC
+
+
+1. Context
+
+Project: GreenPT POC / day 2 (output artifact for technical evaluators).
+
+Why this matters right now:
+results.csv has 192 rows x 14 columns. It's the truth, but it's not the story. Sending raw CSV
+to a technical evaluator is acceptable; sending it to a CTO for sign-off is not. And a manually-
+maintained PDF is worse than the CSV — the moment someone copies a number from the spreadsheet
+into the doc, you've created a transcription error waiting to be discovered at the wrong moment.
+The requirement was: one command regenerates everything. If the benchmark re-runs and combined's
+savings on invoice_parsing shifts from 32% to 28%, the PDF reflects that without anyone touching
+it.
+
+Where this fits:
+The "official" technical writeup of the benchmark. The artifact that makes DL-03 and DL-04's
+findings readable without opening a CSV. Also the regression baseline — the generation timestamp
+on page one tells the reader exactly how fresh the data is.
+
+
+2. Research question
+
+How should benchmark results be packaged into a single artifact that an evaluator can read end-
+to-end in 10 minutes and trust the numbers — without the artifact going stale when the benchmark
+re-runs?
+
+
+3. Current LO stage
+
+[x] Advising   — ADV3 recommended auto-generated PDF (not Jupyter / Notion / Google Docs) as
+                  the technical artifact format before report.py was written; stated the auto-
+                  regen requirement explicitly
+[x] Designing  — picked reportlab PDF over Jupyter / HTML / Markdown
+[x] Realizing  — built report.py: reads results.csv, emits report.pdf + two PNG charts, all
+                  from one command in under 2 seconds
+[x] Managing   — used the output PDF as the official technical writeup
+
+
+4. What makes a good decision here
+
+- One command regenerates the entire artifact from the latest CSV (no manual chart export,
+  no copy-paste)
+- A non-technical reader can extract the headline in < 2 minutes from the executive summary
+- A technical reader can verify the methodology and spot-check per-use-case numbers via the
+  embedded tables
+- The artifact is a single file, e-mailable, no dependencies on the reader's end
+
+
+5. What I decided
+
+Build report.py that:
+
+  1. Reads outputs/results.csv
+  2. Generates two PNG charts (mean savings, mean G-Eval) via matplotlib
+  3. Builds outputs/report.pdf via reportlab Platypus, embedding:
+       - Title + auto-generated timestamp
+       - Executive summary paragraph (auto-populated from data)
+       - Method comparison table (mean savings, mean G-Eval, row count)
+       - The two charts
+       - Per-use-case savings pivot
+       - Per-use-case quality pivot
+       - Per-size savings pivot
+       - Quality / failure breakdown
+       - Methodology notes (token counting, savings formula, quality floor, fairness constants)
+
+
+6. Why this decision
+
+Method: Library (compared reportlab vs weasyprint vs Jupyter export), Showroom (built the PDF
+to be sent as the technical attachment).
+
+Three candidates:
+
+  - Jupyter notebook + nbconvert PDF — flexible but looks scientific. Cell input/output blocks
+    confuse a non-technical reader. nbconvert is fragile across environments. Rejected.
+  - HTML + weasyprint -> PDF — two-stage dependency (template + CSS + weasyprint binary) for
+    one artifact. Heavy for the scope. Rejected.
+  - reportlab Platypus -> PDF — verbose Python (~260 lines) but one script, one output, no
+    template files.
+
+reportlab won on operational simplicity. One command regenerates everything:
+
+    python report.py -> report.pdf + chart_savings.png + chart_quality.png
+
+In under 2 seconds.
+
+[IMAGE: outputs/report.pdf — Page 1 of the benchmark report showing the title, auto-generated
+timestamp, and executive summary paragraph naming the savings winner and quality winner directly
+from the data.]
+
+The executive summary is auto-populated from the data — @report.py:140-144 pulls best_method
+and best_score_method directly from the DataFrame:
+
+    best_method       = by_method["mean_savings"].idxmax()
+    best_savings      = by_method["mean_savings"].max()
+    best_score_method = by_method["mean_score"].idxmax()
+    best_score        = by_method["mean_score"].max()
+
+If a future run flips the winner, the prose updates automatically. There is no risk of the report
+saying "combined is the savings winner" while the chart shows postprocess.
+
+The brand color (#1B5E20) is the single source of truth across the whole report. METHOD_COLORS
+maps each method to a shade of green (@report.py:39-44):
+
+    baseline           -> #999999  (neutral grey — signals "reference")
+    postprocess        -> #4C9F70  (light green)
+    prompt_engineering -> #2E7D32  (mid green)
+    combined           -> #1B5E20  (dark green — the lead)
+
+The same PNGs drop into any other artifact without redoing colors. Visual language is consistent
+across playground and PDF.
+
+The methodology notes section (@report.py:222-239) is four short paragraphs: token counting
+method, savings formula, quality floor, fairness constants. Without that section, the same charts
+look cherry-picked. With it, every number has a known provenance. A reviewer can trace any
+chart value back to a row in results.csv in under a minute. That's the section that turns the
+report from "pretty charts" into "defensible evidence."
+
+What I'd recommend:
+For any benchmark whose results will be re-run more than once, make the report a script — not a
+Google Doc, not a Notion page, not a hand-edited PDF. The time it takes to build report.py pays
+back the first time someone asks "can you rerun with use case X added?" and the report
+regenerates in 2 seconds. The auto-populated executive summary removes an entire class of error:
+the report can never disagree with the charts.
+
+GAP found:
+The PDF has no per-row drill-down. If a reader wants to see why combined scored 4.58 on
+intent_classification, they have to open results.csv separately. An "appendix: per-row table"
+section — sorted by quality_warning then row_id — would close that gap. Scoped as a follow-up.
+
+
+7. Does this hold up
+
+- One command regenerates:       ✅ python report.py -> fresh PDF in <2 seconds;
+                                      outputs/report.pdf + two chart PNGs in sync
+- Headline in <2 minutes:        ✅ executive summary paragraph names savings winner,
+                                      quality winner, and methodology in 4 sentences
+- Methodology verifiable:        ✅ full methodology notes section with formula,
+                                      quality floor, and fairness constants
+                                      (@report.py:222-239)
+- Single file, no dependencies:  |  87 KB PDF confirmed on Adobe Reader and Chrome's
+                                      built-in viewer. matplotlib font rendering not
+                                      tested on every viewer variant.
+
+Assumptions I'm making:
+The reader will trust the embedded charts without re-running the benchmark. Reasonable for a
+10-minute read; not for a formal audit. For an audit, results.csv is the source of truth — the
+PDF is the visualization layer.
+
+What surprised me:
+How much of the perceived rigor came from the methodology notes section — four short paragraphs
+that most people skip. Without them the same charts look like they could be cherry-picked. With
+them, every number has a known provenance. Cheap insurance for a lot of credibility.
+
+
+8. What this unlocks
+
+Next LO stage: Managing — this report is the regression-test baseline for any future change to
+GreenPT's optimization layer.
+
+What I can now do:
+- Regenerate the full artifact from one command after any benchmark re-run
+- Send the PDF as an e-mail attachment to a technical evaluator without explanation
+- Use chart_savings.png and chart_quality.png in any other artifact without redoing the work
+
+Ongoing monitoring:
+The generation timestamp on the first page tells the reader how fresh the data is. If the
+timestamp is more than a week old before a client meeting, re-run the benchmark and regenerate.
+
+How I'll know this worked:
+Someone who wasn't in the room reads the PDF and can name the headline finding without asking a
+clarifying question. That's the test that the writeup carries the story on its own.
+
+
+*@report.py · @outputs/report.pdf · @outputs/chart_savings.png · @outputs/chart_quality.png · @outputs/results.csv*
+*@LO2: Advising · @LO3: Designing · @LO4: Realizing · @LO5: Managing*

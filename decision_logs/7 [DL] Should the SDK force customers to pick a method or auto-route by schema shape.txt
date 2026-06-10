@@ -1,0 +1,165 @@
+﻿[DL] Should the SDK force customers to pick a method or auto-route by schema shape?
+GreenPT POC
+
+
+1. Context
+
+Project: GreenPT benchmarking POC / day 2 (SDK developer experience — last layer before the
+report).
+
+Why this matters right now:
+Forcing every customer to read the benchmark report before picking a method is a non-starter.
+The SDK needs a default that's at least as good as whatever a confused first-time user would pick
+on their own. DL-03 and DL-04 just told us exactly what NOT to do: never default to
+prompt_engineering (loses 15% across the board), never default to combined for tiny outputs
+(loses 36% on intent_classification). That's enough to build v0 routing today — simple Python,
+no ML, no per-request LLM call — and explicitly defer the data-driven v1 to a later pass.
+
+Where this fits:
+The shipping default of GreenPTClient. Powers the "method_used: X (auto)" KPI in the playground
+UI (DL-06).
+
+
+2. Research question
+
+Should the SDK force customers to pick a method, or should it auto-route based on schema shape —
+and what are the minimum viable rules given what the benchmark just found?
+
+
+3. Current LO stage
+
+[x] Advising   — ADV2 translated DL-03/04 findings into concrete routing rules, defined the
+                  v0/v1 split, and recommended dropping prompt_engineering from the fallback
+                  chain before sdk.py was written
+[x] Designing  — picked auto-routing with a rule-based v0 heuristic
+[x] Realizing  — implemented sdk.smart_route + GreenPTClient(method="auto") in @sdk.py
+
+
+4. What makes a good decision here
+
+- A developer can call GreenPTClient().call(prompt, schema) with no configuration and get a
+  sensible result
+- Auto-routing never picks a method known to lose on both savings and quality axes
+- Routing logic is inspectable: no black-box ML model, no per-request LLM call to decide
+  what to do
+- Refinable once real usage data lands — the v0 -> v1 swap is a single function change
+
+
+5. What I decided
+
+Add smart_route(schema) in sdk.py. Default GreenPTClient(method="auto") calls it. Customers
+can override by passing method="combined" etc.
+
+v0 rules (heuristic, before real usage data — @sdk.py:31-55):
+
+    if num_keys <= 2 and avg_key_len <= 4:
+        return "baseline"          # compression not worth it
+    if has_arrays and depth >= 2:
+        return "combined"          # TOON wins on repetition
+    if avg_key_len > 8:
+        return "postprocess"       # key shortening is the main win
+    return "prompt_engineering"    # <- known bug; v1 removes this fallback
+
+
+6. Why this decision
+
+Method: Lab (live smoke test through the playground UI), Library (reviewed how OpenAI's
+tool_choice="auto" is wired — same pattern).
+
+Three options were on the table:
+
+  1. No routing — customer picks. Rejected: doesn't match how modern API products work; first-
+     time users will pick badly and blame the SDK.
+  2. LLM-based routing — call a cheap model to decide. Rejected: adds a per-request LLM call
+     (latency + cost) and is not inspectable.
+  3. Rule-based routing — pure Python heuristics, ~25 LoC. Picked: zero latency overhead, fully
+     inspectable, easy to update.
+
+The SDK is built in three layers. smart_route (@sdk.py:31-55) takes a schema dict and returns a
+method name — pure Python, no external call. TOONResponse (@sdk.py:60-88) wraps the result:
+.decode() returns the plain dict, .raw() returns the wire bytes, .key_map() returns the
+abbreviation map. That clean wrapper means customers never need to know whether they got TOON
+output or plain JSON — they call .decode() and get their data.
+
+GreenPTClient (@sdk.py:93-116) ties it together. method="auto" calls smart_route; any explicit
+method skips routing entirely:
+
+    def call(self, prompt: str, schema: dict) -> TOONResponse:
+        chosen = smart_route(schema) if self.method == "auto" else self.method
+        return TOONResponse(METHODS[chosen](prompt, schema))
+
+v0 shipped with prompt_engineering as the default fallback — before DL-03 landed. The benchmark
+confirmed that choice is wrong: prompt_engineering sends 15% more tokens than baseline at
+identical quality (@outputs/results.csv). This is a known bug in the currently-shipped code. The
+v1 plan exists because the data forced a correction.
+
+Smoke test result through the playground (@app.py -> /api/optimize):
+
+    Input:   5-key invoice schema, method="auto"
+    Routed:  postprocess
+    Result:  60 -> 31 tokens (48.3% savings) in 1.2s
+
+[IMAGE: playground_smoke_test.png — Playground UI showing the 5-key invoice schema smoke test
+result: KPI cards showing 60 -> 31 tokens, 48.3% savings, method_used: postprocess (auto),
+1.2s latency.]
+
+What I'd recommend:
+For any SDK that wraps multiple optimization strategies, ship a v0 auto-router on day one — even
+if the rules are intuition-based — because the alternative is forcing every user to read your
+benchmark report. Then plan v1 as a single-function swap once the data lands. The cost of the
+wrong default is much higher than the cost of a temporarily imperfect heuristic.
+
+GAP found:
+The v0 fallback still includes prompt_engineering, which DL-03 proves is a strictly-worse choice
+than baseline on this benchmark. v1 needs to drop it from the fallback chain entirely and replace
+it with postprocess or combined depending on schema shape. Fix scope: one function, one file
+(@sdk.py:31-55).
+
+
+7. Does this hold up
+
+- Zero-config call works:               ✅ GreenPTClient().call(...) returns a
+                                            decoded dict; smoke test confirms 60 ->
+                                            31 tokens on first call
+- At-least-as-good guarantee:           |  v0 picks reasonable methods on most
+                                            schema shapes, but prompt_engineering
+                                            is still in the fallback — DL-03 proves
+                                            this is wrong. v1 is the fix.
+- Inspectable:                          ✅ pure rules in @sdk.py:31-55; easy to
+                                            log "picked X because schema had Y keys
+                                            at depth Z"
+- Refinable:                            ✅ smart_route is a single function; v1
+                                            swap is a one-file change
+
+Assumptions I'm making:
+Customer schemas resemble benchmark schemas in shape. For very different schemas — deeply nested
+DSLs, hundreds of keys — the v0 rules may pick badly. Worth collecting routing-choice telemetry
+once real customers hit it (ADV2).
+
+What surprised me:
+How much the developer experience hinges on this one function. Without auto-routing, the SDK has
+4 methods and a tutorial. With auto-routing, it has 1 call. The pitch quality jumps an entire
+tier — from "here's how to compare your options" to "drop it in, done."
+
+
+8. What this unlocks
+
+Next LO stage: Designing -> Realizing for the developer playground UI (DL-06), which surfaces
+"method_used (auto)" as a KPI card.
+
+What I can now do:
+- Ship the SDK with a sensible default for any GreenPT-shaped customer
+- Show "method_used: combined (auto)" in the playground UI — routing is visible, not hidden
+- Plan v1 as a scoped one-function update informed by results.csv
+
+Ongoing monitoring:
+Log every routing decision (schema fingerprint -> chosen method) once real customers use the SDK
+— so v1 rules can be validated against real workloads, not just the 48-row benchmark.
+
+How I'll know this worked:
+v1 lands and the playground shows "postprocess (auto)" for intent-classification schemas instead
+of prompt_engineering.
+
+
+*@sdk.py · @outputs/results.csv*
+*@LO2: Advising · @LO3: Designing · @LO4: Realizing*

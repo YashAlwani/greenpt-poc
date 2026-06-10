@@ -1,0 +1,114 @@
+ADVISING EVIDENCE — ADV2
+SDK Design and Zero-Config Routing Recommendation
+GreenPT POC
+
+From: @decision_logs/03_finding_prompt_engineering_verbose.txt · @decision_logs/04_finding_combined_overhead_tiny_outputs.txt · @outputs/results.csv
+
+
+Research question
+-----------------
+Should the SDK force developers to pick a method, or should it auto-route based on schema shape —
+and if so, what rules should govern v0 routing given what the benchmark just found?
+
+
+Recommendation
+--------------
+Implement smart_route(schema) -> method_name in sdk.py. Default GreenPTClient(method="auto")
+to call it. Let developers override with method="combined" etc. if they know what they want.
+
+Ship a v0 heuristic immediately. Plan v1 as a single-function swap once real usage data lands.
+
+
+Why this, specifically
+----------------------
+Method: Library (reviewed how OpenAI tool_choice="auto" is wired — same pattern), Lab (DL-03
+and DL-04 provide the data that makes the routing rules non-arbitrary).
+
+The benchmark just answered the routing question empirically. From outputs/results.csv:
+
+  method              avg_token_savings_pct   avg_g_eval
+  baseline                0.0%                  3.14
+  postprocess            +6.5%                  3.19
+  prompt_engineering    -15.0%                  3.14   <- NEVER DEFAULT
+  combined              varies by use case       4.29
+
+DL-03 confirmed: prompt_engineering sends 15% MORE tokens than baseline at identical quality.
+There is no schema shape where defaulting to prompt_engineering is the right call. Remove it
+from the default routing chain entirely.
+
+DL-04 confirmed: combined is the quality champion (4.29 G-Eval) but overhead varies sharply
+by output size. Invoice extraction: +32.1%. Intent classification: -36.0%. The fixed ~80-token
+instruction prefix (@tools/greentpt_tools.py:45-56) is larger than the entire baseline output
+for short schemas. Combined only pays when the output is big enough that percentage savings
+exceed the fixed overhead.
+
+What the data recommends for routing:
+  - tiny outputs (few keys, shallow schema)     -> postprocess or baseline
+  - long outputs with repeating / nested keys   -> combined
+  - medium schemas with long key names          -> postprocess (key shortening wins
+                                                   without instruction overhead)
+  - NEVER route to prompt_engineering as default
+
+
+V0 heuristic (ship today)
+-------------------------
+Pure Python, ~25 LoC, zero latency overhead, no LLM call (@sdk.py:31-55):
+
+  num_keys <= 2 and avg_key_len <= 4  -> baseline
+  has_arrays and depth >= 2           -> combined
+  avg_key_len > 8                     -> postprocess
+  otherwise                           -> postprocess   (NOT prompt_engineering)
+
+Note: the v0 that shipped had prompt_engineering as the fallback, before DL-03 landed. That
+fallback is a known bug. Fix scope: change the final return in smart_route from
+"prompt_engineering" to "postprocess". One line, one file.
+
+
+V1 plan (post-POC)
+------------------
+Replace the heuristic with a lightweight decision table trained on results.csv. Each row is a
+(schema_shape, method, savings, quality) observation. A lookup table keyed on
+(num_keys_bucket, has_arrays, avg_key_len_bucket) -> best_method gives a data-driven router
+without any ML infrastructure.
+
+Requirements for v1:
+  - Must never recommend prompt_engineering as a default
+  - Must prefer combined for invoice/resume-shaped schemas (num_keys > 5, has_arrays=True,
+    depth >= 2)
+  - Must fall back to postprocess for intent-classification shapes (num_keys <= 3, depth = 1)
+  - Must expose reasoning: smart_route should return (method, reason) so the playground can
+    show "method_used: postprocess (avg_key_len > 8)"
+
+
+SDK design principles
+---------------------
+1. Zero-config first: GreenPTClient().call(prompt, schema) with no other arguments must return
+   a sensible result. Never require the developer to read the benchmark report.
+
+2. Override always available: method="combined" must always work. The auto-router is a default,
+   not a lock-in.
+
+3. Routing is inspectable, not magic: the routing logic should be readable Python. A developer
+   who reads the 25 lines of smart_route should understand exactly why their schema was routed
+   to postprocess.
+
+4. RunResult must carry method_used: the caller should always know which method was selected
+   (especially under auto-routing). method_used: "postprocess (auto)" is more honest than just
+   returning the result.
+
+
+Risks
+-----
+- V0 rules are intuition-based, not data-validated against all real schema shapes. Collect
+  routing telemetry from real users before trusting v0 at scale.
+- If a customer schema is very unusual (hundreds of keys, deeply nested DSL), v0 will pick based
+  on surface features that may not predict savings.
+
+
+Note on scores: the G-Eval averages in the table above (3.14, 3.19, 3.14, 4.29) are the
+ok-rows-only figures from BENCHMARK_ANALYSIS.md (176 rows). These differ slightly from early
+run summaries. The routing conclusions are unchanged.
+
+
+*@sdk.py · @tools/greentpt_tools.py · @outputs/results.csv · @BENCHMARK_ANALYSIS.md*
+*@LO2: Advising*

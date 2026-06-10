@@ -1,0 +1,98 @@
+ADVISING EVIDENCE — ADV3
+Go-to-Market Artifacts Recommendation
+GreenPT POC
+
+From: @outputs/results.csv · @decision_logs/09_benchmark_headline_results.txt
+
+
+Research question
+-----------------
+What artifacts — and in what format — are needed to turn 192 rows of benchmark results into
+a client-ready story, given that the benchmark may re-run and artifacts must never go stale?
+
+
+Recommendation
+--------------
+  Artifact 1: Auto-generated PDF report (report.py)
+     Format:   .pdf generated via reportlab
+     Audience: technical stakeholder / CTO / procurement team
+     When:     auto-regenerated every time results.csv changes
+
+  Artifact 2: Editable client demo deck (make_deck.py)
+     Format:   .pptx generated via python-pptx
+     Audience: sales meeting, exec sponsor, non-technical champion
+     When:     generated once, customized per meeting by sales
+
+Do not use: Google Slides link, Notion page, or a hardcoded PDF. These require manual updates
+whenever results change.
+
+
+Why these formats
+-----------------
+Method: Library (compared format options for each artifact type against the auto-regen and
+editability requirements).
+
+Why reportlab PDF for the technical report:
+
+  Markdown / README: version-controlled, easy to write, but does not look like a deliverable
+  in a client context. Not printable or e-mailable as a standalone artifact. Rejected.
+
+  Jupyter Notebook: good for inline charts, but requires the recipient to run Python to see the
+  charts. nbconvert to PDF is fragile and environment-dependent. Rejected.
+
+  Google Docs / Notion: easy to share via link, but cannot be auto-regenerated from Python
+  without API integration. Introduces a manual update step exactly where errors live. Rejected.
+
+  reportlab PDF (selected): purely programmatic — report.py reads results.csv and writes
+  report.pdf. Re-running report.py always reflects the latest data. No login, no browser, no
+  sharing link. Works offline. The number in the PDF is always the number in the CSV.
+
+Why python-pptx for the deck:
+
+  PDF slides (reportlab): non-editable. Sales cannot adjust per client context. Rejected.
+
+  Google Slides: shareable, collaborative, but requires internet and a Google account. Cannot
+  be auto-generated from Python without the Slides API. Rejected.
+
+  Canva / Figma export: professional templates, not editable by sales without an account, and
+  not script-generatable from benchmark data. Rejected.
+
+  python-pptx (selected): generates an editable PowerPoint file from Python. Sales can open it
+  in PowerPoint, Keynote, or Google Slides and customize per meeting. Data-driven: make_deck.py
+  reads results.csv and populates headline metrics directly — no manual number entry.
+
+
+Minimum viable deck structure (recommended 6 slides, expanded to 11 in DL-07):
+
+  Slide 1: Title + client name (editable field)
+  Slide 2: What we measured — 4 methods x 4 use cases x 2 sizes, T=0, G-Eval quality scoring
+  Slide 3: Headline results table — method / avg_savings / avg_quality (from results.csv)
+  Slide 4: Use-case breakdown — Combined saves 36% on invoices, costs 32% on intent tasks.
+           Smart routing picks the right method automatically.
+  Slide 5: Developer experience — GreenPTClient().call(prompt, schema) -> result.
+           Screenshot of playground UI.
+  Slide 6: Next steps — editable placeholder; sales fills in per meeting
+
+The deck should NOT include raw CSV data, G-Eval methodology explanation, or code snippets.
+Those belong in the PDF report for technical reviewers.
+
+
+What to watch for during implementation
+---------------------------------------
+- python-pptx adds a font dependency. Use system-safe fonts (Calibri, Arial) to avoid rendering
+  surprises at the client site.
+- The headline savings numbers in slide 3 must come from results.csv at generation time, not be
+  hardcoded. A hardcoded number that doesn't match the CSV is what a technical client catches
+  in the first five minutes.
+- Keep all generated outputs in outputs/: results.csv, report.pdf, greenpt_demo.pptx.
+
+
+Note: the final deck (make_deck.py) was expanded to 11 slides beyond the 6 recommended here.
+The core 6-slide structure maps to final slides 1 (title), 5 (how we measured), 6 (results
+headline), 7 (use-case breakdown), 9 (developer experience), and 10 (what's next). Additional
+slides added: problem (2), what GreenPT does (3), drop-in integration (4), live example (8),
+close card (11).
+
+
+*@report.py · @outputs/report.pdf · @outputs/results.csv · @outputs/greenpt_demo.pptx*
+*@LO2: Advising*
