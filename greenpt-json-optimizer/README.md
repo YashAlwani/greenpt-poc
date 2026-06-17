@@ -34,6 +34,23 @@ python run.py                    # full 48-row benchmark
 
 Results land in `outputs/results.csv`.
 
+## Using the SDK
+
+The `sdk.py` client is what a third-party app integrates with — hand it a prompt
+and expected schema, get a decodable response back:
+
+```python
+from sdk import GreenPTClient
+
+client = GreenPTClient()                       # auto-routes per schema
+resp = client.call(prompt, schema)
+data = resp.decode()                           # plain dict
+print(resp.method, resp.token_savings_pct)
+```
+
+Full reference — methods, smart routing, the response object, and failure
+handling — is in **[SDK_USAGE.md](SDK_USAGE.md)**.
+
 ## Files
 
 - `toon.py` — TOON compression engine
@@ -43,4 +60,6 @@ Results land in `outputs/results.csv`.
 - `tools/` — LangChain `@tool` wrappers
 - `run.py` — CLI entry point
 - `generated_llm_dataset.csv` — 48-row evaluation dataset (invoice_parsing, resume_parsing, summarization, intent_classification × S/M/L)
+- `sdk.py` — developer client; see `SDK_USAGE.md`
+- `SDK_USAGE.md` — SDK usage guide
 - `PROJECT.md` — full product/POC spec
