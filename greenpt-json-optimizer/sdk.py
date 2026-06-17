@@ -28,8 +28,8 @@ def _max_depth(obj, level: int = 0) -> int:
     return level
 
 
-def smart_route(schema: dict) -> str:
-    """Pick the best method based on schema shape.
+def route_with_reason(schema: dict) -> tuple[str, str]:
+    """Pick the best method based on schema shape, with a human-readable reason.
 
     Heuristic v0 — refine after benchmark results land:
       - Tiny schemas (≤2 short keys) → baseline (compression not worth it)
@@ -40,19 +40,24 @@ def smart_route(schema: dict) -> str:
     keys = collect_keys(schema)
     num_keys = len(keys)
     if num_keys == 0:
-        return "prompt_engineering"
+        return "prompt_engineering", "empty schema — defaulting to the tuned model"
     avg_key_len = sum(len(k) for k in keys) / num_keys
     depth = _max_depth(schema)
     schema_str = str(schema).lower()
     has_arrays = "array" in schema_str or any(isinstance(v, list) for v in schema.values())
 
     if num_keys <= 2 and avg_key_len <= 4:
-        return "baseline"
+        return "baseline", "tiny flat schema — compression overhead isn't worth it"
     if has_arrays and depth >= 2:
-        return "combined"
+        return "combined", "deep / array-heavy schema — TOON wins on repetition"
     if avg_key_len > 8:
-        return "postprocess"
-    return "prompt_engineering"
+        return "postprocess", "long key names — client-side key shortening is the main win"
+    return "prompt_engineering", "moderate schema — the tuned model handles it"
+
+
+def smart_route(schema: dict) -> str:
+    """Pick the best method based on schema shape. See route_with_reason()."""
+    return route_with_reason(schema)[0]
 
 
 # ── response wrapper ──────────────────────────────────────────────────────────

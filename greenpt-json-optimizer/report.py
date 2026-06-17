@@ -223,9 +223,9 @@ def build_pdf(df: pd.DataFrame):
     story.append(Paragraph("Methodology notes", h2))
     notes = (
         "<b>Token counting:</b> tiktoken cl100k_base on raw model output (tokens_before) "
-        "and on the on-the-wire compressed string (tokens_after). The key_map is treated "
-        "as session-level metadata, sent once per session, not per request — matching how a "
-        "real proxy would operate."
+        "and on the on-the-wire compressed string (tokens_after). The key_map is derived "
+        "from the schema and used to expand the compressed reply back to full field names; "
+        "the token win is the shortened keys on the response itself."
         "<br/><br/>"
         "<b>Savings %:</b> <font face='Courier'>(baseline_tokens − method_tokens) / baseline_tokens × 100</font>, "
         "computed cross-method per row. <font face='Courier'>baseline</font> is therefore always 0%. "

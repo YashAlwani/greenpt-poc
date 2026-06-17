@@ -6,7 +6,7 @@ Benchmark POC for GreenPT — measures token savings of TOON compression and pro
 
 A 3-agent LangGraph pipeline that:
 
-1. **Simulation Agent** — replays rows from a 36-row test dataset (4 use cases × 3 sizes)
+1. **Simulation Agent** — replays rows from a 48-row test dataset (4 use cases × 3 sizes × 4 rows)
 2. **GreenPT Agent** — runs 4 optimization methods against each row and measures tokens
 3. **Eval Agent** — scores each output 1–5 using G-Eval (LLM-as-judge)
 
@@ -29,7 +29,7 @@ Same underlying model (Mistral Small 3.2 24B) for all four — only the optimiza
 pip install -r requirements.txt
 echo "GREENPT_API_KEY=sk-..." > .env
 python run.py --limit 2          # process 2 rows × 4 methods
-python run.py                    # full 36-row benchmark
+python run.py                    # full 48-row benchmark
 ```
 
 Results land in `outputs/results.csv`.
@@ -42,5 +42,5 @@ Results land in `outputs/results.csv`.
 - `nodes/` — the 3 agent node functions
 - `tools/` — LangChain `@tool` wrappers
 - `run.py` — CLI entry point
-- `generated_llm_dataset.csv` — 36-row evaluation dataset
+- `generated_llm_dataset.csv` — 48-row evaluation dataset (invoice_parsing, resume_parsing, summarization, intent_classification × S/M/L)
 - `PROJECT.md` — full product/POC spec
