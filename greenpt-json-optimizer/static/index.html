@@ -45,24 +45,27 @@
       </div>
 
       <label for="prompt">Prompt</label>
-      <textarea id="prompt" rows="11" placeholder="Paste the prompt you'd send to your LLM…">Extract invoice fields from the text below and return JSON.
+      <textarea id="prompt" rows="11" placeholder="Paste the prompt you'd send to your LLM…">Generate structured article metadata for the text below and return JSON.
 
 ---
-Vendor: BluePeak Logistics
-Invoice: BP-8821
-Date: 2026-03-08
-Total: EUR 7,891.60
+The European Grid Goes Green
+Renewable capacity across the EU passed a milestone this quarter as solar
+and wind overtook fossil generation for the first time. Operators are now
+racing to upgrade storage and interconnects to keep the gains stable.
 ---
 
 Return ONLY valid JSON matching the schema.</textarea>
 
       <label for="schema">Expected output schema (JSON)</label>
-      <textarea id="schema" rows="6">{
-  "vendor": "string",
-  "invoice_number": "string",
-  "invoice_date": "string",
-  "total_amount": "number",
-  "currency": "string"
+      <textarea id="schema" rows="12">{
+  "title": "string",
+  "summary": "string",
+  "author": { "name": "string", "affiliation": "string" },
+  "tags": ["string"],
+  "sections": [
+    { "heading": "string", "word_count": "number" }
+  ],
+  "reading_time_minutes": "number"
 }</textarea>
 
       <label for="method">Method</label>
@@ -85,15 +88,15 @@ Return ONLY valid JSON matching the schema.</textarea>
       <div id="result" class="hidden">
         <div class="kpis">
           <div class="kpi">
-            <div class="kpi-label">Tokens before</div>
+            <div class="kpi-label">Baseline tokens</div>
             <div class="kpi-value" id="tokens-before">—</div>
           </div>
           <div class="kpi">
-            <div class="kpi-label">Tokens after</div>
+            <div class="kpi-label">Optimized tokens</div>
             <div class="kpi-value" id="tokens-after">—</div>
           </div>
           <div class="kpi savings">
-            <div class="kpi-label">Savings</div>
+            <div class="kpi-label">Savings vs baseline</div>
             <div class="kpi-value" id="savings">—</div>
           </div>
           <div class="kpi">
@@ -109,6 +112,7 @@ Return ONLY valid JSON matching the schema.</textarea>
             <div class="kpi-value" id="elapsed">—</div>
           </div>
         </div>
+        <p id="route-reason" class="route-reason hidden"></p>
 
         <details open>
           <summary>Decoded JSON (what your app receives)</summary>
@@ -231,9 +235,9 @@ Return ONLY valid JSON matching the schema.</textarea>
       <div class="explain-card">
         <div class="card-icon">🗜</div>
         <h3>TOON — Token Optimization Object Notation</h3>
-        <p>TOON is a lossless JSON compression scheme that shortens key names. Before each session a <em>key map</em> is negotiated:</p>
+        <p>TOON is a lossless JSON compression scheme that shortens key names. A <em>key map</em> is derived from your schema:</p>
         <pre class="explain-pre">{"invoice_number":"a","total_amount":"b",...}</pre>
-        <p>The model returns <code>{"a":"INV-001","b":7891.60}</code>. Your client decodes it back to full names in microseconds. Because JSON keys repeat across millions of calls, cutting them once saves tokens on every single request.</p>
+        <p>The model returns <code>{"a":"INV-001","b":7891.60}</code>. Your client decodes it back to full names in microseconds. The savings come from the compressed reply: long, repeated key names never travel on the response.</p>
       </div>
 
       <div class="explain-card">
@@ -289,14 +293,14 @@ Return ONLY valid JSON matching the schema.</textarea>
         <div class="flow-step">Decoded back<br/>to full JSON</div>
       </div>
       <p style="margin-top:12px;font-size:13px;color:var(--muted)">
-        The key map is sent once per session as session-level metadata — not on every request. Only the compressed payload travels on each call.
+        The key map is derived from your schema and used to expand the compressed reply back to full field names. The token win is on the response: short keys instead of long ones, on every call.
       </p>
     </div>
 
     <div class="explain-card">
       <div class="card-icon">📊</div>
       <h3>Measuring savings</h3>
-      <p>Token counts use <code>tiktoken cl100k_base</code> on the raw model output (<em>tokens_before</em>) vs the on-wire compressed string (<em>tokens_after</em>).</p>
+      <p>Token counts use <code>tiktoken cl100k_base</code>. The headline number compares the <em>baseline</em> call's on-wire tokens against the chosen method's on-wire tokens — so every method is measured against the same reference.</p>
       <pre class="explain-pre">savings % = (baseline_tokens − method_tokens) / baseline_tokens × 100</pre>
       <p>Baseline is always 0%. Negative savings mean the method transmitted more tokens than baseline for that call — typically schema-level overhead on very short responses.</p>
       <p>Quality is scored 1–5 by a second LLM judge using G-Eval on the schema-validated decoded output.</p>

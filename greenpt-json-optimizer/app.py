@@ -3,7 +3,7 @@ GreenPT developer playground — Flask backend.
 
 Run:
     python app.py
-    # then open http://localhost:5000
+    # then open http://localhost:5123
 
 Tabs:
     Playground   — interactive optimizer
@@ -26,7 +26,7 @@ import events
 
 load_dotenv()
 
-from sdk import smart_route                       # noqa: E402
+from sdk import route_with_reason, smart_route    # noqa: E402
 from tools.greentpt_tools import METHODS          # noqa: E402
 
 app = Flask(__name__, static_folder="static", template_folder="static")
@@ -65,7 +65,11 @@ def optimize():
     if not isinstance(schema, dict):
         return jsonify({"error": "schema must be a JSON object"}), 400
 
-    chosen = smart_route(schema) if method == "auto" else method
+    route_reason = None
+    if method == "auto":
+        chosen, route_reason = route_with_reason(schema)
+    else:
+        chosen = method
     if chosen not in METHODS:
         return jsonify({"error": f"unknown method: {chosen}"}), 400
 
@@ -75,19 +79,38 @@ def optimize():
     result = METHODS[chosen](prompt, schema)
     elapsed = round(time.time() - t0, 2)
 
-    events.emit({"type": "optimize_done", "method": chosen, "savings_pct": result["token_savings_pct"], "elapsed_s": elapsed, "t": time.time()})
+    # Headline savings is measured vs an actual baseline call (the same definition
+    # the Report/Stats pages and the Explain tab use), NOT the method's self-
+    # compression. baseline is the reference, so it is 0% by construction.
+    method_tokens = result["tokens_after"]
+    if chosen == "baseline":
+        baseline_tokens = method_tokens
+        savings_vs_baseline = 0.0
+    else:
+        base = METHODS["baseline"](prompt, schema)
+        baseline_tokens = base["tokens_after"] or base["tokens_before"] or 0
+        savings_vs_baseline = (
+            round((baseline_tokens - method_tokens) / baseline_tokens * 100, 1)
+            if baseline_tokens else 0.0
+        )
+
+    events.emit({"type": "optimize_done", "method": chosen, "savings_pct": savings_vs_baseline, "elapsed_s": elapsed, "t": time.time()})
 
     return jsonify({
         "method_requested":  method,
         "method_used":       chosen,
+        "route_reason":      route_reason,
         "elapsed_s":         elapsed,
         "raw_output":        result["raw_output"],
         "toon_output":       result["toon_output"],
         "decoded_output":    result["decoded_output"],
         "key_map":           result["key_map"],
+        "baseline_tokens":   baseline_tokens,
+        "method_tokens":     method_tokens,
         "tokens_before":     result["tokens_before"],
         "tokens_after":      result["tokens_after"],
-        "token_savings_pct": result["token_savings_pct"],
+        "token_savings_pct": savings_vs_baseline,
+        "self_savings_pct":  result["token_savings_pct"],
         "status":            result.get("status", "ok"),
     })
 

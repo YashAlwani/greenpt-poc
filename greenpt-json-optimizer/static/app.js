@@ -3,6 +3,16 @@ const $ = (id) => document.getElementById(id);
 const fmtJSON = (v) => { try { return JSON.stringify(v, null, 2); } catch { return String(v); } };
 const now = () => new Date().toLocaleTimeString("en-GB", { hour12: false });
 
+/* Savings convention: positive = fewer tokens than baseline (good, ↓);
+   negative = more tokens than baseline (bad, ↑). */
+const savingsLabel = (pct) => {
+  if (pct == null || isNaN(pct)) return "—";
+  const v = Number(pct);
+  if (v > 0) return `↓ ${v.toFixed(1)}%`;
+  if (v < 0) return `↑ ${Math.abs(v).toFixed(1)}%`;
+  return "0.0%";
+};
+
 /* ══════════════════════════════════════════════════════════════════════════
    TAB ROUTING
 ══════════════════════════════════════════════════════════════════════════ */
@@ -86,16 +96,14 @@ function buildPacketRow(ev) {
     status = ev.status;
   } else if (ev.type === "result") {
     typeLabel = "✓ DONE";
-    const sign = ev.savings_pct >= 0 ? "−" : "+";
-    detail = `${ev.method} · ${sign}${Math.abs(ev.savings_pct).toFixed(1)}% savings · ${ev.tokens_before}→${ev.tokens_after} tokens`;
+    detail = `${ev.method} · ${savingsLabel(ev.savings_pct)} wire compression · ${ev.tokens_before}→${ev.tokens_after} tokens`;
     status = ev.status;
   } else if (ev.type === "optimize_start") {
     typeLabel = "▶ START";
     detail = `optimize · method=${ev.method} → ${ev.chosen}`;
   } else if (ev.type === "optimize_done") {
     typeLabel = "■ END";
-    const sign = ev.savings_pct >= 0 ? "−" : "+";
-    detail = `optimize complete · ${sign}${Math.abs(ev.savings_pct).toFixed(1)}% · ${ev.elapsed_s}s`;
+    detail = `optimize complete · ${savingsLabel(ev.savings_pct)} vs baseline · ${ev.elapsed_s}s`;
   } else if (ev.type === "report_start") {
     typeLabel = "▶ START";
     detail = `report · ${ev.total_rows} rows × 4 methods`;
@@ -216,17 +224,26 @@ function renderResult(data) {
   $("empty").classList.add("hidden");
   $("result").classList.remove("hidden");
 
-  $("tokens-before").textContent = data.tokens_before;
-  $("tokens-after").textContent  = data.tokens_after;
+  $("tokens-before").textContent = data.baseline_tokens != null ? data.baseline_tokens : data.tokens_before;
+  $("tokens-after").textContent  = data.method_tokens   != null ? data.method_tokens   : data.tokens_after;
 
   const s = data.token_savings_pct;
-  const sign = s > 0 ? "−" : s < 0 ? "+" : "";
-  $("savings").textContent = `${sign}${Math.abs(s).toFixed(1)}%`;
+  const savingsEl = $("savings");
+  savingsEl.textContent = savingsLabel(s);
+  savingsEl.classList.toggle("negative", s < 0);
 
   $("method-used").textContent = data.method_requested === "auto"
     ? `${data.method_used} (auto)` : data.method_used;
   $("status").textContent  = data.status;
   $("elapsed").textContent = data.elapsed_s + "s";
+
+  const reasonEl = $("route-reason");
+  if (data.method_requested === "auto" && data.route_reason) {
+    reasonEl.textContent = `Smart router → ${data.method_used}: ${data.route_reason}`;
+    reasonEl.classList.remove("hidden");
+  } else {
+    reasonEl.classList.add("hidden");
+  }
 
   $("decoded").textContent = fmtJSON(data.decoded_output);
   $("toon").textContent    = data.toon_output || "—";
@@ -284,7 +301,7 @@ function renderStats(d) {
     </div>
     <div class="stat-card">
       <div class="stat-card-label">Best savings</div>
-      <div class="stat-card-value">${best.mean_savings > 0 ? "−" : ""}${Math.abs(best.mean_savings).toFixed(1)}%</div>
+      <div class="stat-card-value">${savingsLabel(best.mean_savings)}</div>
       <div class="stat-card-sub">${best.method.replace(/_/g, " ")}</div>
     </div>
     <div class="stat-card">
@@ -304,7 +321,7 @@ function renderStats(d) {
   const maxSavings = Math.max(...d.by_method.map(r => Math.abs(r.mean_savings)), 1);
   $("stats-savings-chart").innerHTML = d.by_method.map(r => barRow(
     r.method, r.mean_savings, maxSavings,
-    `${r.mean_savings > 0 ? "−" : r.mean_savings < 0 ? "+" : ""}${Math.abs(r.mean_savings).toFixed(1)}%`,
+    savingsLabel(r.mean_savings),
     METHOD_COLORS[r.method] || "#4c9f70"
   )).join("");
 

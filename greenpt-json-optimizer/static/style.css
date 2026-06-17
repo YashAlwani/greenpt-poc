@@ -232,6 +232,18 @@ button:disabled { background: var(--muted); cursor: not-allowed; transform: none
 .kpi-value.method { font-size: 12px; }
 .kpi.savings { background: var(--green-100); border-color: var(--green-300); }
 .kpi.savings .kpi-value { color: var(--green-700); font-size: 20px; }
+.kpi.savings .kpi-value.negative { color: var(--red); }
+
+.route-reason {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--muted);
+  background: var(--green-100);
+  border-left: 3px solid var(--green-300);
+  border-radius: 4px;
+}
+.route-reason.hidden { display: none; }
 
 details {
   margin: 8px 0;

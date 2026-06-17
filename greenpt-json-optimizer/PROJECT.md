@@ -4,7 +4,7 @@
 
 GreenPT is an API that optimises LLM usage for sustainability by reducing token consumption while preserving output quality.
 
-- The product hosts its own GPT-3 model on green data centres.
+- The product hosts its own model (Mistral Small 3.2 24B) on green data centres.
 - Model routing between external providers is **not** in scope. Optimization happens at the **output / prompt level**, not by switching models.
 - Two pricing tiers exist for the product (not part of this POC):
   - **GreenL** — €0.25/M input, €0.80/M output. Aggressive optimization, tight `max_tokens`, full JSON/TOON processing.
@@ -14,7 +14,7 @@ GreenPT is an API that optimises LLM usage for sustainability by reducing token 
 
 The POC is the **benchmarking / evaluation pipeline** for the JSON optimization tool. It is the measurement layer that tells us whether our optimization methods actually save tokens without destroying quality.
 
-The pipeline compares **3 optimization methods** across **3 use cases** × **3 prompt sizes**, scores each output for quality with G-Eval, and produces a results table.
+The pipeline compares **3 optimization methods** (plus a baseline) across **4 use cases** × **3 prompt sizes**, scores each output for quality with G-Eval, and produces a results table.
 
 ## Optimization methods being compared
 
@@ -26,9 +26,10 @@ A baseline (no optimization) is needed as the reference point for token savings 
 
 ## Use cases
 
-1. **Structured Data Extraction** — flat JSON.
-2. **Text Analysis & Classification** — moderate nesting.
-3. **Content Generation with Metadata** — deep / complex nesting.
+1. **invoice_parsing** — structured data extraction, flat JSON.
+2. **resume_parsing** — structured data extraction, moderate nesting.
+3. **intent_classification** — text analysis & classification.
+4. **summarization** — content generation with metadata, deeper nesting.
 
 ## Prompt sizes (input tokens)
 
@@ -38,8 +39,8 @@ A baseline (no optimization) is needed as the reference point for token savings 
 
 ## Dataset shape
 
-- 3 use cases × 3 sizes × 3–4 rows ≈ **~36 rows total**.
-- Each row is run through all 3 methods (+ baseline) → **~108 scored outputs**.
+- 4 use cases × 3 sizes × 4 rows = **48 rows total**.
+- Each row is run through all 4 methods (baseline + 3) → **192 scored outputs**.
 
 ### Key separation principle
 
@@ -115,6 +116,7 @@ Atlassian identifiers:
 
 - Real-time GreenPT API endpoint and the GreenL/GreenR pricing tiers.
 - Multi-model routing.
-- A web UI.
 - Caching infrastructure.
 - Production deployment.
+
+(Note: a Flask developer console — `app.py` — now ships with the POC as a demo surface. It is not a production UI.)
