@@ -35,3 +35,6 @@ decisions/
 
 # Plan files (local Claude Code state)
 .claude/
+
+# Local Claude directive for slide generation (not for repo)
+MAKE_SLIDES.md
