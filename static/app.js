@@ -13,6 +13,7 @@ const savingsLabel = (pct) => {
   return "0.0%";
 };
 
+
 /* ══════════════════════════════════════════════════════════════════════════
    TAB ROUTING
 ══════════════════════════════════════════════════════════════════════════ */
@@ -244,6 +245,7 @@ function renderResult(data) {
   } else {
     reasonEl.classList.add("hidden");
   }
+
 
   $("decoded").textContent = fmtJSON(data.decoded_output);
   $("toon").textContent    = data.toon_output || "—";
